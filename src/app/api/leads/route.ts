@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { query, ensureTablesExist } from "@/lib/db";
 import { verifyRequestAuth } from "@/lib/auth";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET(req: NextRequest) {
   if (!(await verifyRequestAuth(req))) {
     return NextResponse.json({ success: false, error: "Acesso não autorizado." }, { status: 401 });

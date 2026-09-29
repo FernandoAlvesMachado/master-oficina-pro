@@ -2502,32 +2502,43 @@ export default function MasterDashboard() {
                   <AlertTriangle size={22} color="#F59E0B" style={{ flexShrink: 0, marginTop: "2px" }} />
                   <div>
                     <strong style={{ color: "#FDE68A", fontSize: "13.5px" }}>
-                      {dbDiagData?.message || "POSTGRES_URL não configurada"}
+                      {dbDiagData?.message || "POSTGRES_URL não configurada no servidor"}
                     </strong>
                     <p style={{ margin: "4px 0 0", color: "#E2E8F0", fontSize: "12px", lineHeight: "1.5" }}>
-                      Para que o Painel Master gerencie as mesmas oficinas conectadas ao seu sistema, configure a variável no arquivo <code>.env.local</code>.
+                      Para que o Painel Master se conecte ao banco na Vercel, a variável precisa estar salva no painel e o projeto precisa ser <strong>Redeployado</strong>.
                     </p>
                   </div>
                 </div>
 
                 <div
                   style={{
-                    background: "rgba(10, 14, 23, 0.8)",
+                    background: "rgba(10, 14, 23, 0.9)",
                     border: "1px solid var(--border-subtle)",
                     borderRadius: "8px",
-                    padding: "14px",
-                    fontSize: "12px",
-                    color: "var(--text-muted)",
+                    padding: "16px",
+                    fontSize: "12.5px",
+                    color: "#CBD5E1",
                   }}
                 >
-                  <strong style={{ color: "#FFF", display: "block", marginBottom: "6px" }}>
-                    Como Obter na Vercel:
+                  <strong style={{ color: "var(--primary)", display: "block", marginBottom: "8px", fontSize: "13px" }}>
+                    🚀 Passo a Passo Obrigatório na Vercel:
                   </strong>
-                  <ol style={{ paddingLeft: "18px", margin: 0, lineHeight: "1.6" }}>
-                    <li>Acesse seu painel na <strong>Vercel (vercel.com)</strong>.</li>
-                    <li>Abra seu projeto atual e clique na aba <strong>Storage</strong>.</li>
-                    <li>Clique no banco Postgres (Neon) e acesse <strong>.env.local</strong>.</li>
-                    <li>Copie o valor de <code>POSTGRES_URL</code> e cole no seu arquivo local.</li>
+                  <ol style={{ paddingLeft: "18px", margin: 0, lineHeight: "1.7" }}>
+                    <li>
+                      Acesse <strong>vercel.com</strong> → Abra o projeto do Painel Master.
+                    </li>
+                    <li>
+                      Vá em <strong>Settings</strong> → <strong>Environment Variables</strong>.
+                    </li>
+                    <li>
+                      Adicione a variável <strong>POSTGRES_URL</strong> (ou <strong>DATABASE_URL</strong>) e cole sua URL do Neon.
+                    </li>
+                    <li>
+                      <strong style={{ color: "#FBBF24" }}>ATENÇÃO:</strong> Marque a caixinha <strong>Production</strong> (e Preview/Development).
+                    </li>
+                    <li>
+                      <strong style={{ color: "#34D399" }}>PASSO FINAL:</strong> Vá na aba <strong>Deployments</strong> → clique nos <strong>3 pontinhos (...)</strong> ao lado do deploy atual → clique em <strong>Redeploy</strong>! (A Vercel só aplica variáveis novas após um Redeploy).
+                    </li>
                   </ol>
                 </div>
               </div>

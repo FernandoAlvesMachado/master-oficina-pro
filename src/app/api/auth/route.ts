@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSessionToken, verifyRequestAuth, COOKIE_NAME } from "@/lib/auth";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // Rate limiting simples em memória para prevenir ataques de força bruta
 interface RateLimitEntry {
   attempts: number;

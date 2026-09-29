@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { query, hashPassword, ensureTablesExist } from "@/lib/db";
 import { verifyRequestAuth } from "@/lib/auth";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 // GET: Listar todos os clientes, métricas e status de vencimento
 export async function GET(req: NextRequest) {
   if (!(await verifyRequestAuth(req))) {
@@ -63,7 +66,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        error: "Falha ao processar consulta de oficinas.",
+        error: err.message || "Falha ao processar consulta de oficinas.",
         metrics: { total: 0, active: 0, trial: 0, expired: 0, blocked: 0 },
         tenants: [],
       },
