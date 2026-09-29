@@ -1,26 +1,29 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { isDbConfigured, query, ensureTablesExist } from "@/lib/db";
+import { verifyRequestAuth } from "@/lib/auth";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Verificação defensiva de autenticação
+  if (!(await verifyRequestAuth(req))) {
+    return NextResponse.json({ success: false, error: "Acesso não autorizado." }, { status: 401 });
+  }
+
   const configured = isDbConfigured();
 
   if (!configured) {
     return NextResponse.json({
       connected: false,
       configured: false,
-      message: "POSTGRES_URL não configurada no arquivo .env.local",
-      tip: "Abra o .env.local e cole a URL do seu PostgreSQL da Vercel/Neon",
+      message: "Banco de dados não configurado nas variáveis de ambiente do servidor.",
     });
   }
 
   try {
     const start = Date.now();
-    const result = await query<{ now: string; version: string }>(
-      "SELECT NOW() as now, version() as version;"
-    );
+    await query("SELECT 1;");
     const latencyMs = Date.now() - start;
 
-    // Checar tabelas existentes
+    // Checar apenas presença das tabelas essenciais (sem expor detalhes de infraestrutura)
     const tablesRes = await query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';`
     );
@@ -30,8 +33,6 @@ export async function GET() {
       connected: true,
       configured: true,
       latencyMs,
-      serverTime: result[0]?.now,
-      databaseVersion: result[0]?.version?.split(" ")?.[0] || "PostgreSQL",
       existingTables: tableNames,
       requiredTablesPresent: ["tenants", "users", "tenant_store"].every((t) =>
         tableNames.includes(t)
@@ -41,13 +42,17 @@ export async function GET() {
     return NextResponse.json({
       connected: false,
       configured: true,
-      error: err.message,
-      message: "Falha ao conectar no PostgreSQL. Verifique credenciais ou liberação de IP/SSL.",
+      error: "Falha na conexão com o banco de dados.",
+      message: "Verifique as variáveis de ambiente e liberação de conexões na Vercel / Neon.",
     });
   }
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
+  if (!(await verifyRequestAuth(req))) {
+    return NextResponse.json({ success: false, error: "Acesso não autorizado." }, { status: 401 });
+  }
+
   try {
     const res = await ensureTablesExist();
     return NextResponse.json(res);

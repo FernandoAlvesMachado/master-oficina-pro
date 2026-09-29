@@ -197,6 +197,10 @@ export default function MasterDashboard() {
     setLoading(true);
     try {
       const res = await fetch("/api/tenants");
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        return;
+      }
       const data = await res.json();
       if (data.success) {
         setTenants(data.tenants || []);
@@ -215,6 +219,10 @@ export default function MasterDashboard() {
   const fetchLeads = async () => {
     try {
       const res = await fetch("/api/leads");
+      if (res.status === 401) {
+        setIsAuthenticated(false);
+        return;
+      }
       const data = await res.json();
       if (data.success) {
         setLeads(data.leads || []);

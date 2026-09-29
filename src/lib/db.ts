@@ -1,39 +1,75 @@
 import { Pool } from "pg";
 import crypto from "crypto";
 
-const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL || "";
+// Recupera a string de conexão de forma estritamente segura através das variáveis de ambiente
+export function getConnectionString(): string {
+  // 1. Variáveis diretas injetadas com segurança na Vercel ou .env.local
+  const envUrl =
+    process.env.POSTGRES_URL ||
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL_NON_POOLING ||
+    process.env.DATABASE_URL_UNPOOLED;
 
-let pool: Pool | null = null;
+  if (envUrl && envUrl.trim().length > 10 && !envUrl.includes("sua_string_de_conexao")) {
+    return envUrl.trim();
+  }
 
-export function isDbConfigured(): boolean {
-  return Boolean(connectionString && connectionString.trim().length > 10 && !connectionString.includes("sua_string_de_conexao"));
+  // 2. Variáveis individuais do PostgreSQL (se configuradas no painel da Vercel)
+  if (process.env.PGHOST && process.env.PGUSER && process.env.PGPASSWORD) {
+    const host = process.env.PGHOST;
+    const user = process.env.PGUSER;
+    const pass = process.env.PGPASSWORD;
+    const db = process.env.PGDATABASE || "neondb";
+    const port = process.env.PGPORT || "5432";
+    return `postgresql://${user}:${pass}@${host}:${port}/${db}?sslmode=require`;
+  }
+
+  return "";
 }
 
-export function getPool(): Pool | null {
-  if (!isDbConfigured()) {
-    return null;
+export function isDbConfigured(): boolean {
+  const cs = getConnectionString();
+  return Boolean(cs && cs.trim().length > 10);
+}
+
+// Manter singleton do Pool no escopo global para evitar vazamento de conexões em serverless
+declare global {
+  // eslint-disable-next-line no-var
+  var _kvnsPgPool: Pool | undefined;
+}
+
+export function getPool(): Pool {
+  const connectionString = getConnectionString();
+  if (!connectionString) {
+    throw new Error(
+      "BANCO_NAO_CONFIGURADO: A variável de ambiente POSTGRES_URL ou DATABASE_URL não foi definida no servidor."
+    );
   }
-  if (!pool) {
-    pool = new Pool({
+
+  if (!globalThis._kvnsPgPool) {
+    globalThis._kvnsPgPool = new Pool({
       connectionString,
-      ssl: connectionString.includes("localhost") ? false : { rejectUnauthorized: false },
+      ssl: connectionString.includes("localhost")
+        ? false
+        : {
+            rejectUnauthorized: false,
+          },
       max: 10,
-      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
     });
   }
-  return pool;
+  return globalThis._kvnsPgPool;
 }
 
 export function hashPassword(password: string): string {
-  const salt = "kvns-workshop-platform-secret-salt";
+  const salt = process.env.PASSWORD_SALT || "kvns-workshop-platform-secret-salt";
   return crypto.createHmac("sha256", salt).update(password).digest("hex");
 }
 
 export async function query<T = any>(sqlText: string, params: any[] = []): Promise<T[]> {
   const p = getPool();
-  if (!p) {
-    throw new Error("POSTGRES_URL_NOT_CONFIGURED");
-  }
   const client = await p.connect();
   try {
     const res = await client.query(sqlText, params);
@@ -43,18 +79,13 @@ export async function query<T = any>(sqlText: string, params: any[] = []): Promi
   }
 }
 
-// Inicializa automaticamente as tabelas se ainda não existirem no PostgreSQL Neon
+// Inicializa automaticamente as tabelas se ainda não existirem no PostgreSQL
 export async function ensureTablesExist(): Promise<{ success: boolean; message: string; tables: string[] }> {
   if (!isDbConfigured()) {
-    return {
-      success: false,
-      message: "Banco de dados não configurado no .env.local",
-      tables: [],
-    };
+    throw new Error("POSTGRES_URL_NOT_CONFIGURED");
   }
 
   const p = getPool();
-  if (!p) throw new Error("Pool unavailable");
   const client = await p.connect();
 
   try {
@@ -127,167 +158,4 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
   } finally {
     client.release();
   }
-}
-
-// Fallback Mock Store para testes e demonstração imediata caso o Neon ainda não tenha URL
-export interface MockTenant {
-  id: string;
-  name: string;
-  owner_name: string;
-  email: string;
-  phone: string;
-  plan: string;
-  status: "TRIAL" | "ACTIVE" | "BLOCKED" | "EXPIRED";
-  trial_until: string | null;
-  expires_at: string | null;
-  enabled_features: Record<string, boolean>;
-  company_settings: Record<string, any>;
-  created_at: string;
-  users_count: number;
-  last_login_at: string | null;
-}
-
-// Memória local para demonstração inicial enquanto o usuário configura a Vercel
-let globalMockTenants: MockTenant[] = [
-  {
-    id: "tenant-demo-01",
-    name: "Auto Mecânica Prime Motors",
-    owner_name: "Carlos Eduardo Silva",
-    email: "carlos@primemotors.com.br",
-    phone: "(11) 98765-4321",
-    plan: "PRO",
-    status: "ACTIVE",
-    trial_until: null,
-    expires_at: new Date(Date.now() + 24 * 86400000).toISOString(),
-    enabled_features: {
-      ordens_servico: true,
-      checklist_fotos: true,
-      estoque_pecas: true,
-      pdv_balcao: true,
-      financeiro: true,
-      whatsapp_crm: true,
-      relatorios: true,
-    },
-    company_settings: {
-      primaryColor: "#F26B21",
-    },
-    created_at: new Date(Date.now() - 45 * 86400000).toISOString(),
-    users_count: 3,
-    last_login_at: new Date(Date.now() - 2 * 3600000).toISOString(),
-  },
-  {
-    id: "tenant-demo-02",
-    name: "Speed Garage Centro Automotivo",
-    owner_name: "Marcos Vinicius Ribeiro",
-    email: "contato@speedgarage.com",
-    phone: "(21) 99876-1234",
-    plan: "TRIAL",
-    status: "TRIAL",
-    trial_until: new Date(Date.now() + 8 * 86400000).toISOString(),
-    expires_at: new Date(Date.now() + 8 * 86400000).toISOString(),
-    enabled_features: {
-      ordens_servico: true,
-      checklist_fotos: true,
-      estoque_pecas: false,
-      pdv_balcao: false,
-      financeiro: true,
-      whatsapp_crm: false,
-      relatorios: false,
-    },
-    company_settings: {
-      primaryColor: "#0284C7",
-    },
-    created_at: new Date(Date.now() - 6 * 86400000).toISOString(),
-    users_count: 1,
-    last_login_at: new Date(Date.now() - 5 * 3600000).toISOString(),
-  },
-  {
-    id: "tenant-demo-03",
-    name: "Oficina do Alemão Especializada",
-    owner_name: "Ricardo Schmidt",
-    email: "ricardo@oficinadoalemao.com",
-    phone: "(47) 99123-9988",
-    plan: "ENTERPRISE",
-    status: "EXPIRED",
-    trial_until: null,
-    expires_at: new Date(Date.now() - 3 * 86400000).toISOString(),
-    enabled_features: {
-      ordens_servico: true,
-      checklist_fotos: true,
-      estoque_pecas: true,
-      pdv_balcao: true,
-      financeiro: true,
-      whatsapp_crm: true,
-      relatorios: true,
-    },
-    company_settings: {},
-    created_at: new Date(Date.now() - 90 * 86400000).toISOString(),
-    users_count: 5,
-    last_login_at: new Date(Date.now() - 4 * 86400000).toISOString(),
-  },
-  {
-    id: "tenant-demo-04",
-    name: "Injeção Eletrônica & Suspensão Santos",
-    owner_name: "José Ferreira Santos",
-    email: "santos.mecanica@gmail.com",
-    phone: "(31) 98455-7711",
-    plan: "PRO",
-    status: "BLOCKED",
-    trial_until: null,
-    expires_at: new Date(Date.now() + 15 * 86400000).toISOString(),
-    enabled_features: {
-      ordens_servico: true,
-      checklist_fotos: true,
-      estoque_pecas: false,
-      pdv_balcao: false,
-      financeiro: false,
-      whatsapp_crm: false,
-      relatorios: false,
-    },
-    company_settings: {},
-    created_at: new Date(Date.now() - 60 * 86400000).toISOString(),
-    users_count: 2,
-    last_login_at: new Date(Date.now() - 12 * 86400000).toISOString(),
-  },
-];
-
-let globalMockLeads = [
-  {
-    id: "lead-01",
-    name: "Rodrigo Mendonça",
-    workshop_name: "Mendonça Auto Peças e Mecânica",
-    email: "rodrigo.mendonca@yahoo.com.br",
-    phone: "(19) 97112-4433",
-    status: "NEW",
-    origin: "landing_page_trial",
-    notes: "Interessado em teste de 14 dias para 3 mecânicos",
-    created_at: new Date(Date.now() - 4 * 3600000).toISOString(),
-  },
-  {
-    id: "lead-02",
-    name: "Felipe Nogueira",
-    workshop_name: "FN Car Service",
-    email: "fn.carservice@outlook.com",
-    phone: "(81) 99344-8822",
-    status: "NEW",
-    origin: "whatsapp_instagram",
-    notes: "Viu anúncio no Instagram sobre checklist fotográfico",
-    created_at: new Date(Date.now() - 18 * 3600000).toISOString(),
-  },
-];
-
-export function getMockTenants(): MockTenant[] {
-  return globalMockTenants;
-}
-
-export function setMockTenants(tenants: MockTenant[]) {
-  globalMockTenants = tenants;
-}
-
-export function getMockLeads() {
-  return globalMockLeads;
-}
-
-export function setMockLeads(leads: any[]) {
-  globalMockLeads = leads;
 }
