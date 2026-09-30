@@ -188,10 +188,37 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
       );
     `);
 
+    // 5. Tabela chat_messages (Suporte Master x Oficinas)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id VARCHAR(64) PRIMARY KEY,
+        tenant_id VARCHAR(64) NOT NULL,
+        sender VARCHAR(20) NOT NULL,
+        sender_name VARCHAR(255),
+        text TEXT NOT NULL,
+        read BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_tenant ON chat_messages(tenant_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at);
+    `);
+
+    // 6. Tabela chat_threads (Controle de Atendimento Aberto x Arquivado)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_threads (
+        tenant_id VARCHAR(64) PRIMARY KEY,
+        status VARCHAR(20) DEFAULT 'OPEN',
+        archived_at TIMESTAMPTZ,
+        archived_by VARCHAR(50) DEFAULT 'MASTER',
+        last_message_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     return {
       success: true,
       message: "Todas as tabelas do sistema KVNS estão ativas e sincronizadas no PostgreSQL!",
-      tables: ["tenants", "users", "leads", "tenant_store"],
+      tables: ["tenants", "users", "leads", "tenant_store", "chat_messages", "chat_threads"],
     };
   } finally {
     client.release();
