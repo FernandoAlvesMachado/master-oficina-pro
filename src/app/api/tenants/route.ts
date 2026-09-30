@@ -172,7 +172,7 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { tenantId, status, addDays, setExactExpiresAt, enabledFeatures, newPassword } = body;
+    const { tenantId, status, addDays, setExactExpiresAt, setRemainingDays, enabledFeatures, newPassword } = body;
 
     if (!tenantId) {
       return NextResponse.json({ success: false, error: "tenantId é obrigatório" }, { status: 400 });
@@ -180,7 +180,9 @@ export async function PATCH(req: NextRequest) {
 
     let computedExpiresAt: string | null = null;
 
-    if (setExactExpiresAt) {
+    if (setRemainingDays !== undefined && setRemainingDays !== null) {
+      computedExpiresAt = new Date(Date.now() + Number(setRemainingDays) * 86400000).toISOString();
+    } else if (setExactExpiresAt) {
       computedExpiresAt = new Date(setExactExpiresAt).toISOString();
     } else if (addDays) {
       const cur = await query("SELECT expires_at FROM tenants WHERE id = $1", [tenantId]);

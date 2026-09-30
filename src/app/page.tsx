@@ -106,6 +106,8 @@ export default function MasterDashboard() {
   const [featuresModalTenant, setFeaturesModalTenant] = useState<Tenant | null>(null);
   const [passwordModalTenant, setPasswordModalTenant] = useState<Tenant | null>(null);
   const [calendarModalTenant, setCalendarModalTenant] = useState<Tenant | null>(null);
+  const [daysModalTenant, setDaysModalTenant] = useState<Tenant | null>(null);
+  const [customRemainingDays, setCustomRemainingDays] = useState<number>(30);
   const [isDbModalOpen, setIsDbModalOpen] = useState(false);
   const [actionMenuTenantId, setActionMenuTenantId] = useState<string | null>(null);
 
@@ -336,6 +338,46 @@ export default function MasterDashboard() {
         showToast(`Data de vencimento atualizada para ${new Date(exactDateValue).toLocaleDateString("pt-BR")}!`);
         setCalendarModalTenant(null);
         fetchTenants();
+      }
+    } catch (err: any) {
+      showToast("Erro: " + err.message, "error");
+    }
+  };
+
+  // Open modal to modify remaining days
+  const handleOpenDaysModal = (tenant: Tenant) => {
+    let currentRemaining = 30;
+    if (tenant.expires_at) {
+      const diff = Math.ceil((new Date(tenant.expires_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      currentRemaining = diff > 0 ? diff : 0;
+    }
+    setCustomRemainingDays(currentRemaining);
+    setDaysModalTenant(tenant);
+  };
+
+  // Save modified remaining days
+  const handleSaveRemainingDays = async () => {
+    if (!daysModalTenant) return;
+    try {
+      const res = await fetch("/api/tenants", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenantId: daysModalTenant.id,
+          setRemainingDays: Number(customRemainingDays),
+          status: "ACTIVE",
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(
+          `Validade de "${daysModalTenant.name}" definida para ${customRemainingDays} dias restantes!`,
+          "success"
+        );
+        setDaysModalTenant(null);
+        fetchTenants();
+      } else {
+        showToast(data.error || "Erro ao atualizar dias restantes", "error");
       }
     } catch (err: any) {
       showToast("Erro: " + err.message, "error");
@@ -1445,7 +1487,28 @@ export default function MasterDashboard() {
 
                         {/* Expiration */}
                         <td style={{ padding: "16px 18px" }}>
-                          {getExpirationBadge(t.expires_at, t.status)}
+                          <div
+                            onClick={() => handleOpenDaysModal(t)}
+                            title="Clique para modificar os dias restantes desta oficina"
+                            style={{
+                              cursor: "pointer",
+                              padding: "4px 8px",
+                              borderRadius: "6px",
+                              border: "1px solid transparent",
+                              display: "inline-block",
+                              transition: "all 0.15s ease",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = "rgba(242, 107, 33, 0.08)";
+                              e.currentTarget.style.borderColor = "rgba(242, 107, 33, 0.3)";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = "transparent";
+                              e.currentTarget.style.borderColor = "transparent";
+                            }}
+                          >
+                            {getExpirationBadge(t.expires_at, t.status)}
+                          </div>
                         </td>
 
                         {/* Users & Last Login */}
@@ -1475,6 +1538,27 @@ export default function MasterDashboard() {
                               alignItems: "center",
                             }}
                           >
+                            {/* Modificar Dias Restantes (Item Direto) */}
+                            <button
+                              onClick={() => handleOpenDaysModal(t)}
+                              title="Modificar dias restantes desta oficina"
+                              style={{
+                                background: "rgba(245, 158, 11, 0.15)",
+                                color: "#FBBF24",
+                                border: "1px solid rgba(245, 158, 11, 0.35)",
+                                padding: "6px 10px",
+                                fontSize: "12px",
+                                fontWeight: 700,
+                                borderRadius: "6px",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                              }}
+                            >
+                              <Clock size={13} />
+                              <span>Dias</span>
+                            </button>
+
                             {/* +30 Days Renewal */}
                             <button
                               onClick={() => handleAddDays(t.id, 30, t.name)}
@@ -1585,6 +1669,26 @@ export default function MasterDashboard() {
                                     gap: "2px",
                                   }}
                                 >
+                                  <button
+                                    onClick={() => {
+                                      handleOpenDaysModal(t);
+                                      setActionMenuTenantId(null);
+                                    }}
+                                    style={{
+                                      padding: "8px 12px",
+                                      justifyContent: "flex-start",
+                                      color: "#FBBF24",
+                                      fontSize: "12.5px",
+                                      borderRadius: "6px",
+                                      width: "100%",
+                                    }}
+                                    onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(245, 158, 11, 0.1)")}
+                                    onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                                  >
+                                    <Clock size={14} color="#FBBF24" />
+                                    <span>Modificar Dias Restantes</span>
+                                  </button>
+
                                   <button
                                     onClick={() => {
                                       setPasswordModalTenant(t);
@@ -2300,6 +2404,244 @@ export default function MasterDashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* MODAL: MODIFICAR DIAS RESTANTES */}
+      {/* ==================================================================== */}
+      {daysModalTenant && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.75)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 100,
+            padding: "20px",
+          }}
+        >
+          <div className="glass-modal" style={{ maxWidth: "460px", width: "100%", padding: "28px" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div
+                  style={{
+                    width: "38px",
+                    height: "38px",
+                    borderRadius: "8px",
+                    background: "rgba(245, 158, 11, 0.2)",
+                    color: "#FBBF24",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Clock size={20} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: "18px", color: "#FFF", margin: 0 }}>
+                    Modificar Dias Restantes
+                  </h3>
+                  <p style={{ color: "var(--text-muted)", fontSize: "12.5px", margin: "2px 0 0" }}>
+                    {daysModalTenant.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDaysModalTenant(null)}
+                style={{ color: "var(--text-dim)", padding: "4px" }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Current expiration card */}
+            <div
+              style={{
+                background: "rgba(10, 14, 23, 0.7)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "8px",
+                padding: "12px 16px",
+                marginBottom: "18px",
+                fontSize: "12.5px",
+                color: "var(--text-muted)",
+              }}
+            >
+              <div>
+                Validade atual:{" "}
+                <strong style={{ color: "#FFF" }}>
+                  {daysModalTenant.expires_at
+                    ? new Date(daysModalTenant.expires_at).toLocaleDateString("pt-BR")
+                    : "Sem limite definido"}
+                </strong>
+              </div>
+              <div style={{ marginTop: "4px", fontSize: "12px", color: "var(--text-dim)" }}>
+                Defina quantos dias de acesso a oficina terá a partir de hoje.
+              </div>
+            </div>
+
+            {/* Input direct number */}
+            <div style={{ marginBottom: "16px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "12.5px",
+                  color: "#FFF",
+                  fontWeight: 600,
+                  marginBottom: "6px",
+                }}
+              >
+                Dias Restantes Desejados:
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <input
+                  type="number"
+                  min="0"
+                  max="3650"
+                  value={customRemainingDays}
+                  onChange={(e) => setCustomRemainingDays(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  style={{
+                    flex: 1,
+                    fontSize: "20px",
+                    fontWeight: 800,
+                    padding: "10px 14px",
+                    color: "var(--primary)",
+                    background: "rgba(10, 14, 23, 0.9)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: "8px",
+                    textAlign: "center",
+                  }}
+                  autoFocus
+                />
+                <span style={{ fontSize: "13.5px", color: "var(--text-muted)", fontWeight: 600 }}>
+                  dias a partir de hoje
+                </span>
+              </div>
+
+              {/* Dynamic preview of new date */}
+              <div
+                style={{
+                  marginTop: "10px",
+                  fontSize: "12px",
+                  color: "#34D399",
+                  background: "rgba(16, 185, 129, 0.1)",
+                  padding: "8px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid rgba(16, 185, 129, 0.2)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                }}
+              >
+                <Calendar size={14} />
+                <span>
+                  Nova data calculada:{" "}
+                  <strong>
+                    {new Date(Date.now() + customRemainingDays * 86400000).toLocaleDateString("pt-BR")}
+                  </strong>{" "}
+                  (Oficina ativa)
+                </span>
+              </div>
+            </div>
+
+            {/* Presets */}
+            <div style={{ marginBottom: "20px" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "11px",
+                  color: "var(--text-muted)",
+                  fontWeight: 600,
+                  marginBottom: "6px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                }}
+              >
+                Atalhos Rápidos:
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px" }}>
+                {[
+                  { days: 0, label: "0d (Vence hoje)" },
+                  { days: 7, label: "7 dias" },
+                  { days: 14, label: "14d (Trial)" },
+                  { days: 30, label: "30 dias" },
+                  { days: 60, label: "60 dias" },
+                  { days: 90, label: "90 dias" },
+                  { days: 180, label: "180 dias" },
+                  { days: 365, label: "365d (1 ano)" },
+                ].map((preset) => (
+                  <button
+                    key={preset.days}
+                    type="button"
+                    onClick={() => setCustomRemainingDays(preset.days)}
+                    style={{
+                      padding: "8px 4px",
+                      borderRadius: "6px",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      background:
+                        customRemainingDays === preset.days
+                          ? "var(--primary)"
+                          : "rgba(255, 255, 255, 0.05)",
+                      color: customRemainingDays === preset.days ? "#FFF" : "var(--text-muted)",
+                      border: `1px solid ${
+                        customRemainingDays === preset.days
+                          ? "var(--primary)"
+                          : "var(--border-subtle)"
+                      }`,
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button
+                type="button"
+                onClick={() => setDaysModalTenant(null)}
+                style={{
+                  flex: 1,
+                  padding: "11px",
+                  background: "var(--bg-card-subtle)",
+                  color: "#FFF",
+                  borderRadius: "8px",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveRemainingDays}
+                style={{
+                  flex: 1,
+                  padding: "11px",
+                  background: "linear-gradient(135deg, #F26B21 0%, #D84E06 100%)",
+                  color: "#FFF",
+                  borderRadius: "8px",
+                  fontWeight: 800,
+                  fontSize: "13px",
+                  boxShadow: "0 4px 14px rgba(242, 107, 33, 0.3)",
+                }}
+              >
+                Salvar Dias Restantes
+              </button>
+            </div>
           </div>
         </div>
       )}
