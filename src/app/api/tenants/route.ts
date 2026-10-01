@@ -85,13 +85,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       name,
-      ownerName,
+      ownerName = name,
       email,
       phone,
       password = "123",
       plan = "PRO",
       daysValid = 30,
       enabledFeatures: customFeatures,
+      leadId,
+      status: requestedStatus,
     } = body;
 
     if (!name || !email) {
@@ -105,6 +107,9 @@ export async function POST(req: NextRequest) {
     const userId = `usr-${Date.now()}`;
     const passwordHash = hashPassword(password);
     const expiresAt = new Date(Date.now() + Number(daysValid) * 86400000);
+    const isTrial = plan === "TRIAL" || requestedStatus === "TRIAL";
+    const tenantStatus = requestedStatus || (isTrial ? "TRIAL" : "ACTIVE");
+    const trialUntil = isTrial ? expiresAt.toISOString() : null;
 
     const defaultFeatures = customFeatures || {
       ordens_servico: true,
@@ -122,7 +127,7 @@ export async function POST(req: NextRequest) {
       slogan: "Centro Automotivo Especializado",
       phone,
       email,
-      primaryColor: "#F26B21",
+      primaryColor: "#9EE824",
       secondaryColor: "#0f172a",
       themeMode: "light",
       userName: ownerName,
@@ -130,8 +135,8 @@ export async function POST(req: NextRequest) {
     };
 
     await query(
-      `INSERT INTO tenants (id, name, owner_name, email, phone, plan, status, expires_at, enabled_features, company_settings)
-       VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', $7, $8, $9)`,
+      `INSERT INTO tenants (id, name, owner_name, email, phone, plan, status, trial_until, expires_at, enabled_features, company_settings)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         tenantId,
         name,
@@ -139,6 +144,8 @@ export async function POST(req: NextRequest) {
         email.toLowerCase().trim(),
         phone,
         plan,
+        tenantStatus,
+        trialUntil,
         expiresAt.toISOString(),
         JSON.stringify(defaultFeatures),
         JSON.stringify(initialSettings),
@@ -157,7 +164,25 @@ export async function POST(req: NextRequest) {
       [tenantId, JSON.stringify(initialSettings)]
     );
 
-    return NextResponse.json({ success: true, tenantId, isDemoMode: false });
+    // Se a oficina foi originada de um Lead pendente, marca como APROVADO e associa o tenant
+    if (leadId) {
+      try {
+        await query(
+          `UPDATE leads SET status = 'APPROVED', tenant_id = $1 WHERE id = $2`,
+          [tenantId, leadId]
+        );
+      } catch (leadErr) {
+        console.warn("Aviso ao vincular lead com tenant:", leadErr);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      tenantId,
+      generatedPassword: password,
+      expiresAt: expiresAt.toISOString(),
+      isDemoMode: false,
+    });
   } catch (err: any) {
     console.error("Erro ao criar tenant:", err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

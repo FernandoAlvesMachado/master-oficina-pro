@@ -1,13 +1,14 @@
 import { NextRequest } from "next/server";
 
-export const COOKIE_NAME = "kvns_master_auth_token";
+export const COOKIE_NAME = "giravo_master_auth_token";
+export const LEGACY_COOKIE_NAME = "kvns_master_auth_token";
 const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24; // 24 horas
 
 function getSecretString(): string {
   return (
     process.env.MASTER_ADMIN_PASSWORD ||
     process.env.AUTH_SECRET ||
-    "kvns-secure-master-platform-salt-2026"
+    "giravo-secure-master-platform-salt-2026"
   );
 }
 
@@ -81,6 +82,6 @@ export async function verifySessionToken(token: string | undefined | null): Prom
 }
 
 export async function verifyRequestAuth(req: NextRequest): Promise<boolean> {
-  const token = req.cookies.get(COOKIE_NAME)?.value;
+  const token = req.cookies.get(COOKIE_NAME)?.value || req.cookies.get(LEGACY_COOKIE_NAME)?.value;
   return verifySessionToken(token);
 }

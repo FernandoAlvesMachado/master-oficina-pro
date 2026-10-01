@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySessionToken, COOKIE_NAME } from "./lib/auth";
+import { verifySessionToken, COOKIE_NAME, LEGACY_COOKIE_NAME } from "./lib/auth";
 
 // Segurança Global: Intercepta e protege todas as APIs e rotas sensíveis
 export async function middleware(req: NextRequest) {
@@ -15,14 +15,18 @@ export async function middleware(req: NextRequest) {
     return res;
   };
 
-  // Permite a rota de login (/api/auth via POST)
-  if (pathname === "/api/auth" && req.method === "POST") {
+  // Permite rota de login (/api/auth via POST), envio de leads da landing page (/api/leads via POST) e requisições OPTIONS (CORS)
+  if (
+    (pathname === "/api/auth" && req.method === "POST") ||
+    (pathname === "/api/leads" && req.method === "POST") ||
+    req.method === "OPTIONS"
+  ) {
     return applySecurityHeaders(NextResponse.next());
   }
 
   // Verifica proteção para todas as rotas da API
   if (pathname.startsWith("/api/")) {
-    const token = req.cookies.get(COOKIE_NAME)?.value;
+    const token = req.cookies.get(COOKIE_NAME)?.value || req.cookies.get(LEGACY_COOKIE_NAME)?.value;
     const isValid = await verifySessionToken(token);
 
     if (!isValid) {

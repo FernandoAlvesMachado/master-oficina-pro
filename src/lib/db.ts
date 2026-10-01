@@ -74,7 +74,7 @@ export function getEnvDiagnostics() {
 // Manter singleton do Pool no escopo global para evitar vazamento de conexões em serverless
 declare global {
   // eslint-disable-next-line no-var
-  var _kvnsPgPool: Pool | undefined;
+  var _giravoPgPool: Pool | undefined;
 }
 
 export function getPool(): Pool {
@@ -85,8 +85,8 @@ export function getPool(): Pool {
     );
   }
 
-  if (!globalThis._kvnsPgPool) {
-    globalThis._kvnsPgPool = new Pool({
+  if (!globalThis._giravoPgPool) {
+    globalThis._giravoPgPool = new Pool({
       connectionString,
       ssl: connectionString.includes("localhost")
         ? false
@@ -98,7 +98,7 @@ export function getPool(): Pool {
       connectionTimeoutMillis: 10000,
     });
   }
-  return globalThis._kvnsPgPool;
+  return globalThis._giravoPgPool;
 }
 
 export function hashPassword(password: string): string {
@@ -217,7 +217,7 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
 
     return {
       success: true,
-      message: "Todas as tabelas do sistema KVNS estão ativas e sincronizadas no PostgreSQL!",
+      message: "Todas as tabelas do sistema GIRAVO estão ativas e sincronizadas no PostgreSQL!",
       tables: ["tenants", "users", "leads", "tenant_store", "chat_messages", "chat_threads"],
     };
   } finally {

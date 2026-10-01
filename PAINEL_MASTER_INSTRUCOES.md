@@ -1,6 +1,6 @@
-# 🛠️ Guia de Implementação: Painel Master Administrativo KVNS
+# 🛠️ Guia de Implementação: Painel Master Administrativo GIRAVO
 
-Este documento contém o passo a passo completo, arquitetura, esquema do banco de dados e o **código-fonte pronto para uso** para a criação do seu **Painel Master (segundo projeto)**.
+Este documento contém o passo a passo completo, arquitetura, esquema do banco de dados e o **código-fonte pronto para uso** para a criação do seu **Painel Master (GIRAVO)**.
 
 Por meio desse Painel Master independente, você terá controle centralizado de todas as oficinas clientes conectadas ao mesmo banco de dados da Vercel.
 
@@ -12,7 +12,7 @@ O sistema atual da oficina (este projeto) e o seu novo **Painel Master** compart
 
 ```
 ┌──────────────────────────────────────────────┐       ┌──────────────────────────────────────────────┐
-│        SISTEMA DA OFICINA (app.kvns.com.br)  │       │       PAINEL MASTER (master.kvns.com.br)     │
+│        SISTEMA DA OFICINA (app.giravo.com.br) │       │       PAINEL MASTER (master.giravo.com.br)   │
 │  - Cadastro de Leads & Trial 14 dias         │       │  - Gestão de Todos os Clientes               │
 │  - Painel com Logo, Nome e Cores Próprias    │       │  - Controle de Vencimento (+30d, +1 ano)    │
 │  - Ordens de Serviço & Fotos de Vistoria     │       │  - Bloqueio / Desbloqueio Imediato           │

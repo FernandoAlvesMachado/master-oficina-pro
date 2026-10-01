@@ -62,6 +62,7 @@ import {
   Archive,
   Inbox,
 } from "lucide-react";
+import { GiravoIcon, GiravoLogo, GiravoAppBadge } from "@/components/GiravoBrand";
 
 interface Tenant {
   id: string;
@@ -318,6 +319,34 @@ export default function MasterDashboard() {
   // Exact date state
   const [exactDateValue, setExactDateValue] = useState("");
 
+  // Lead Approval & Credentials Flow States (Aprovação de Teste de 14 Dias sem senha prévia)
+  const [approvingLead, setApprovingLead] = useState<Lead | null>(null);
+  const [approvalWorkshopName, setApprovalWorkshopName] = useState("");
+  const [approvalOwnerName, setApprovalOwnerName] = useState("");
+  const [approvalEmail, setApprovalEmail] = useState("");
+  const [approvalPhone, setApprovalPhone] = useState("");
+  const [approvalPassword, setApprovalPassword] = useState("");
+  const [approvalDays, setApprovalDays] = useState(14);
+  const [approvalFeatures, setApprovalFeatures] = useState<Record<string, boolean>>({
+    ordens_servico: true,
+    checklist_fotos: true,
+    estoque_pecas: true,
+    pdv_balcao: true,
+    financeiro: true,
+    whatsapp_crm: true,
+    relatorios: true,
+  });
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvedSuccessData, setApprovedSuccessData] = useState<{
+    lead: Lead;
+    tenantId: string;
+    password: string;
+    expiresAt: string;
+    workshopUrl: string;
+  } | null>(null);
+  const [leadFilterTab, setLeadFilterTab] = useState<"PENDING" | "APPROVED" | "REJECTED" | "ALL">("PENDING");
+  const [leadSearchTerm, setLeadSearchTerm] = useState("");
+
   // Toast notification
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
 
@@ -554,16 +583,21 @@ export default function MasterDashboard() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    // Intervalo de polling rápido
+    // Intervalo de polling rápido (chat e novas solicitações de leads)
     const interval = setInterval(() => {
       fetchChatMessages(true);
-    }, 2500);
+      fetchLeads();
+    }, 3500);
 
     // Sync instantâneo quando o usuário foca na janela/aba
-    const onFocus = () => fetchChatMessages(true);
+    const onFocus = () => {
+      fetchChatMessages(true);
+      fetchLeads();
+    };
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         fetchChatMessages(true);
+        fetchLeads();
       }
     };
 
@@ -587,7 +621,7 @@ export default function MasterDashboard() {
       id: tempId,
       tenantId: selectedChatTenantId,
       sender: "MASTER",
-      senderName: "Suporte Master KVNS",
+      senderName: "Suporte Master GIRAVO",
       text: textToSend,
       timestamp: new Date().toISOString(),
       read: false,
@@ -614,7 +648,7 @@ export default function MasterDashboard() {
         body: JSON.stringify({
           tenantId: selectedChatTenantId,
           sender: "MASTER",
-          senderName: "Suporte Master KVNS",
+          senderName: "Suporte Master GIRAVO",
           text: textToSend,
         }),
       });
@@ -1011,15 +1045,179 @@ export default function MasterDashboard() {
     setActiveNav("chat");
   };
 
-  // Convert Lead to Tenant
+  // Gerador de senhas seguras e fáceis para aprovação de teste
+  const generateRandomPassword = () => {
+    const prefixes = ["GIRAVO", "GIRO", "AUTO", "TURBO", "OFICINA"];
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const num = Math.floor(1000 + Math.random() * 9000);
+    return `${prefix}-${num}`;
+  };
+
+  // Iniciar aprovação de lead (abre modal dedicado de aprovação com senha gerada)
+  const handleStartApproval = (lead: Lead) => {
+    setApprovingLead(lead);
+    setApprovalWorkshopName(lead.workshop_name || (lead.name ? `${lead.name} Oficina` : "Oficina GIRAVO"));
+    setApprovalOwnerName(lead.name || "Proprietário");
+    setApprovalEmail(lead.email || "");
+    setApprovalPhone(lead.phone || "");
+    setApprovalPassword(generateRandomPassword());
+    setApprovalDays(14);
+    setApprovalFeatures({
+      ordens_servico: true,
+      checklist_fotos: true,
+      estoque_pecas: true,
+      pdv_balcao: true,
+      financeiro: true,
+      whatsapp_crm: true,
+      relatorios: true,
+    });
+  };
+
+  // Confirmar aprovação e criar conta da oficina
+  const handleConfirmApproval = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!approvingLead) return;
+    setApprovalLoading(true);
+
+    try {
+      const res = await fetch("/api/tenants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadId: approvingLead.id,
+          name: approvalWorkshopName,
+          ownerName: approvalOwnerName,
+          email: approvalEmail,
+          phone: approvalPhone,
+          password: approvalPassword,
+          plan: "TRIAL",
+          status: "TRIAL",
+          daysValid: approvalDays,
+          enabledFeatures: approvalFeatures,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Oficina "${approvalWorkshopName}" aprovada e liberada com sucesso!`, "success");
+        setLeads((prev) =>
+          prev.map((l) =>
+            l.id === approvingLead.id
+              ? { ...l, status: "APPROVED", tenant_id: data.tenantId }
+              : l
+          )
+        );
+        fetchTenants();
+        fetchLeads();
+
+        const originUrl = typeof window !== "undefined" ? window.location.origin : "";
+        const workshopUrl = originUrl.includes("3005")
+          ? originUrl.replace("3005", "3000")
+          : "https://app.giravo.com.br";
+
+        setApprovedSuccessData({
+          lead: approvingLead,
+          tenantId: data.tenantId,
+          password: approvalPassword,
+          expiresAt: data.expiresAt,
+          workshopUrl,
+        });
+
+        setApprovingLead(null);
+      } else {
+        showToast(data.error || "Erro ao aprovar oficina", "error");
+      }
+    } catch (err: any) {
+      showToast("Erro: " + err.message, "error");
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  // Recusar solicitação de teste
+  const handleRejectLead = async (leadId: string, leadName: string) => {
+    if (!confirm(`Deseja recusar a solicitação de teste de "${leadName}"?`)) return;
+    try {
+      const res = await fetch("/api/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, status: "REJECTED" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Solicitação de "${leadName}" marcada como recusada.`, "info");
+        setLeads((prev) =>
+          prev.map((l) => (l.id === leadId ? { ...l, status: "REJECTED" } : l))
+        );
+      }
+    } catch (err: any) {
+      showToast("Erro: " + err.message, "error");
+    }
+  };
+
+  // Reabrir solicitação recusada
+  const handleReopenLead = async (leadId: string) => {
+    try {
+      const res = await fetch("/api/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, status: "PENDING_APPROVAL" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast("Solicitação reaberta para aprovação!", "success");
+        setLeads((prev) =>
+          prev.map((l) => (l.id === leadId ? { ...l, status: "PENDING_APPROVAL" } : l))
+        );
+      }
+    } catch (err: any) {
+      showToast("Erro: " + err.message, "error");
+    }
+  };
+
+  // Excluir solicitação permanentemente
+  const handleDeleteLead = async (leadId: string) => {
+    if (!confirm("Excluir esta solicitação permanentemente?")) return;
+    try {
+      const res = await fetch("/api/leads", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast("Solicitação excluída.", "info");
+        setLeads((prev) => prev.filter((l) => l.id !== leadId));
+      }
+    } catch (err: any) {
+      showToast("Erro: " + err.message, "error");
+    }
+  };
+
+  // Gerador de mensagem formatada de boas-vindas para WhatsApp
+  const getWhatsAppMessageText = (params: {
+    ownerName: string;
+    workshopName: string;
+    email: string;
+    password: string;
+    url: string;
+    days: number;
+  }) => {
+    return (
+      `🎉 *Olá, ${params.ownerName}!* Tudo bem?\n\n` +
+      `Sua solicitação de teste de ${params.days} dias no sistema *GIRAVO* para a oficina *${params.workshopName}* foi *APROVADA* com sucesso! 🚀\n\n` +
+      `Aqui estão seus dados de acesso exclusivos:\n` +
+      `🔗 *Link do Sistema:* ${params.url}\n` +
+      `👤 *E-mail de Login:* ${params.email}\n` +
+      `🔑 *Senha Provisória:* ${params.password}\n\n` +
+      `Seus módulos de Ordens de Serviço, Fotos de Vistoria, Estoque e Financeiro já estão 100% liberados para você usar.\n\n` +
+      `Aproveite para cadastrar seus primeiros clientes e emitir sua primeira O.S.!\n` +
+      `Se tiver qualquer dúvida, basta responder aqui. Bem-vindo ao GIRAVO!`
+    );
+  };
+
+  // Convert Lead to Tenant (redireciona para o modal de aprovação)
   const handleConvertLead = (lead: Lead) => {
-    setNewName(lead.workshop_name || lead.name + " Oficina");
-    setNewOwner(lead.name);
-    setNewEmail(lead.email);
-    setNewPhone(lead.phone);
-    setNewPlan("TRIAL");
-    setNewDays(14);
-    setIsNewModalOpen(true);
+    handleStartApproval(lead);
   };
 
   // Filtered tenants calculation
@@ -1119,9 +1317,9 @@ export default function MasterDashboard() {
   // Atualiza título da aba no navegador com contador estilo WhatsApp Web
   useEffect(() => {
     if (totalUnreadMessages > 0) {
-      document.title = `(${totalUnreadMessages}) 💬 Atendimento Master | KVNS`;
+      document.title = `(${totalUnreadMessages}) 💬 Atendimento Master | GIRAVO`;
     } else {
-      document.title = "KVNS Painel Master | Gestão Oficinas";
+      document.title = "GIRAVO Painel Master | Gestão que faz seu negócio girar";
     }
   }, [totalUnreadMessages]);
 
@@ -1139,6 +1337,36 @@ export default function MasterDashboard() {
     const hasUnread = msgs.some((m) => m.sender === "CLIENT" && !m.read);
     return thread?.status === "ARCHIVED" && !hasUnread;
   }).length;
+
+  // Contagens e Filtros para Solicitações de Teste de 14 Dias (Leads)
+  const isPendingStatus = (st?: string) =>
+    !st || st === "PENDING_APPROVAL" || st === "NEW" || st === "PENDING";
+  const isApprovedStatus = (st?: string) =>
+    st === "APPROVED" || st === "CONVERTED";
+  const isRejectedStatus = (st?: string) =>
+    st === "REJECTED";
+
+  const pendingLeadsCount = leads.filter((l) => isPendingStatus(l.status)).length;
+  const approvedLeadsCount = leads.filter((l) => isApprovedStatus(l.status)).length;
+  const rejectedLeadsCount = leads.filter((l) => isRejectedStatus(l.status)).length;
+
+  const filteredLeads = leads.filter((l) => {
+    // 1. Filtro por status
+    if (leadFilterTab === "PENDING" && !isPendingStatus(l.status)) return false;
+    if (leadFilterTab === "APPROVED" && !isApprovedStatus(l.status)) return false;
+    if (leadFilterTab === "REJECTED" && !isRejectedStatus(l.status)) return false;
+
+    // 2. Filtro por busca de texto
+    if (!leadSearchTerm.trim()) return true;
+    const q = leadSearchTerm.toLowerCase();
+    return (
+      (l.name && l.name.toLowerCase().includes(q)) ||
+      (l.workshop_name && l.workshop_name.toLowerCase().includes(q)) ||
+      (l.email && l.email.toLowerCase().includes(q)) ||
+      (l.phone && l.phone.includes(q)) ||
+      (l.notes && l.notes.toLowerCase().includes(q))
+    );
+  });
 
   // Lista de Oficinas para o Chat Filtrada e Ordenada (Estilo WhatsApp + Inbox Zero)
   const sortedChatTenants = [...tenants]
@@ -1209,33 +1437,59 @@ export default function MasterDashboard() {
           style={{
             maxWidth: "420px",
             width: "100%",
-            padding: "36px 32px",
+            padding: "38px 32px",
             textAlign: "center",
             border: "1px solid var(--border-strong)",
+            borderRadius: "var(--radius-lg)",
+            boxShadow: "0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(158, 232, 36, 0.08)",
           }}
         >
-          {/* Logo Brand Emblem Reto */}
-          <div
-            style={{
-              width: "56px",
-              height: "56px",
-              background: "var(--primary)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              margin: "0 auto 20px",
-              color: "#FFF",
-            }}
-          >
-            <ShieldAlert size={32} strokeWidth={2.2} />
-          </div>
+          {/* Logo Brand Emblem GIRAVO */}
+          <div style={{ marginBottom: "26px" }}>
+            <div
+              style={{
+                width: "68px",
+                height: "68px",
+                borderRadius: "20px",
+                background: "linear-gradient(145deg, #131A26, #0A0E15)",
+                border: "1px solid rgba(158, 232, 36, 0.3)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto 16px",
+                boxShadow: "0 12px 30px rgba(0, 0, 0, 0.6), 0 0 25px rgba(158, 232, 36, 0.18)",
+              }}
+            >
+              <GiravoIcon size={46} color="var(--primary)" />
+            </div>
 
-          <h2 style={{ fontSize: "20px", fontWeight: 800, marginBottom: "4px", color: "#FFF" }}>
-            KVNS MASTER ADMIN
-          </h2>
-          <p style={{ color: "var(--text-muted)", fontSize: "13px", marginBottom: "26px" }}>
-            Controle Central e Gestão de Oficinas Conectadas
-          </p>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", marginBottom: "4px" }}>
+              <h2 style={{ fontSize: "22px", fontWeight: 900, color: "#FFF", letterSpacing: "0.03em", margin: 0 }}>
+                GIRAVO
+              </h2>
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontWeight: 800,
+                  color: "var(--primary)",
+                  background: "rgba(158, 232, 36, 0.12)",
+                  border: "1px solid rgba(158, 232, 36, 0.3)",
+                  padding: "2px 7px",
+                  borderRadius: "4px",
+                  letterSpacing: "0.04em",
+                }}
+              >
+                MASTER
+              </span>
+            </div>
+
+            <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: "4px 0 6px" }}>
+              Gestão que faz seu negócio girar.
+            </p>
+            <p style={{ color: "var(--text-dim)", fontSize: "11px", margin: 0, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+              Oficinas • Auto centers • Revendas
+            </p>
+          </div>
 
           <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <div style={{ textAlign: "left" }}>
@@ -1265,6 +1519,7 @@ export default function MasterDashboard() {
                   border: "1px solid var(--border-strong)",
                   color: "#FFF",
                   fontSize: "14px",
+                  borderRadius: "var(--radius-sm)",
                 }}
                 autoFocus
               />
@@ -1282,6 +1537,7 @@ export default function MasterDashboard() {
                   alignItems: "center",
                   gap: "8px",
                   textAlign: "left",
+                  borderRadius: "var(--radius-sm)",
                 }}
               >
                 <AlertTriangle size={16} style={{ flexShrink: 0 }} />
@@ -1296,10 +1552,12 @@ export default function MasterDashboard() {
                 width: "100%",
                 padding: "13px",
                 background: "var(--primary)",
-                color: "#FFF",
+                color: "#06080D",
                 fontWeight: 800,
                 fontSize: "13.5px",
+                borderRadius: "var(--radius-sm)",
                 marginTop: "4px",
+                boxShadow: "0 4px 18px rgba(158, 232, 36, 0.25)",
               }}
             >
               {authLoading ? (
@@ -1308,7 +1566,7 @@ export default function MasterDashboard() {
                 </>
               ) : (
                 <>
-                  <Lock size={15} /> Acessar Painel Central
+                  <Lock size={15} /> Acessar Painel Master GIRAVO
                 </>
               )}
             </button>
@@ -1401,27 +1659,44 @@ export default function MasterDashboard() {
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
               <div
                 style={{
-                  width: "36px",
-                  height: "36px",
-                  background: "var(--primary)",
-                  color: "#FFF",
+                  width: "38px",
+                  height: "38px",
+                  borderRadius: "11px",
+                  background: "linear-gradient(145deg, #131A26, #0A0E15)",
+                  border: "1px solid rgba(158, 232, 36, 0.3)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontWeight: 900,
-                  fontSize: "16px",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.5), 0 0 12px rgba(158, 232, 36, 0.15)",
+                  flexShrink: 0,
                 }}
               >
-                <ShieldAlert size={20} />
+                <GiravoIcon size={24} color="var(--primary)" />
               </div>
               <div>
-                <h2 style={{ fontSize: "15px", fontWeight: 800, color: "#FFF", letterSpacing: "0.02em", margin: 0 }}>
-                  KVNS MASTER
-                </h2>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <h2 style={{ fontSize: "15px", fontWeight: 900, color: "#FFF", letterSpacing: "0.03em", margin: 0 }}>
+                    GIRAVO
+                  </h2>
+                  <span
+                    style={{
+                      fontSize: "9px",
+                      fontWeight: 800,
+                      color: "var(--primary)",
+                      background: "rgba(158, 232, 36, 0.12)",
+                      border: "1px solid rgba(158, 232, 36, 0.3)",
+                      padding: "1px 5px",
+                      borderRadius: "4px",
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    MASTER
+                  </span>
+                </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "5px", marginTop: "2px" }}>
-                  <span className="pulse-dot" style={{ background: "var(--emerald)" }} />
-                  <span style={{ fontSize: "10px", color: "var(--text-dim)", fontWeight: 700, textTransform: "uppercase" }}>
-                    CENTRAL OFICINAS
+                  <span className="pulse-dot" style={{ background: "var(--primary)" }} />
+                  <span style={{ fontSize: "9.5px", color: "var(--text-dim)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    CENTRAL DE GESTÃO
                   </span>
                 </div>
               </div>
@@ -1431,14 +1706,16 @@ export default function MasterDashboard() {
               style={{
                 width: "36px",
                 height: "36px",
-                background: "var(--primary)",
-                color: "#FFF",
+                borderRadius: "10px",
+                background: "linear-gradient(145deg, #131A26, #0A0E15)",
+                border: "1px solid rgba(158, 232, 36, 0.25)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
+                boxShadow: "0 0 10px rgba(158, 232, 36, 0.15)",
               }}
             >
-              <ShieldAlert size={20} />
+              <GiravoIcon size={22} color="var(--primary)" />
             </div>
           )}
         </div>
@@ -1452,6 +1729,7 @@ export default function MasterDashboard() {
             style={{
               width: "100%",
               padding: "11px 14px",
+              borderRadius: "var(--radius-sm)",
               justifyContent: sidebarCollapsed ? "center" : "flex-start",
               background: activeNav === "tenants" ? "var(--bg-card-subtle)" : "transparent",
               color: activeNav === "tenants" ? "var(--primary)" : "var(--text-muted)",
@@ -1466,9 +1744,10 @@ export default function MasterDashboard() {
               <span
                 style={{
                   marginLeft: "auto",
-                  background: activeNav === "tenants" ? "rgba(242, 107, 33, 0.2)" : "rgba(255, 255, 255, 0.05)",
+                  background: activeNav === "tenants" ? "rgba(158, 232, 36, 0.16)" : "rgba(255, 255, 255, 0.05)",
                   color: activeNav === "tenants" ? "var(--primary)" : "var(--text-dim)",
                   padding: "1px 6px",
+                  borderRadius: "var(--radius-full)",
                   fontSize: "11px",
                   fontWeight: 700,
                 }}
@@ -1584,20 +1863,42 @@ export default function MasterDashboard() {
             }}
           >
             <Sparkles size={18} />
-            {!sidebarCollapsed && <span>Leads & Testes</span>}
-            {!sidebarCollapsed && leads.length > 0 && (
-              <span
-                style={{
-                  marginLeft: "auto",
-                  background: "rgba(245, 158, 11, 0.15)",
-                  color: "#FBBF24",
-                  padding: "1px 6px",
-                  fontSize: "11px",
-                  fontWeight: 700,
-                }}
-              >
-                {leads.length}
-              </span>
+            {!sidebarCollapsed && <span>Solicitações de Teste</span>}
+            {!sidebarCollapsed && (
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px" }}>
+                {pendingLeadsCount > 0 ? (
+                  <span
+                    style={{
+                      background: "rgba(158, 232, 36, 0.2)",
+                      color: "var(--primary)",
+                      border: "1px solid rgba(158, 232, 36, 0.35)",
+                      padding: "2px 7px",
+                      borderRadius: "var(--radius-full)",
+                      fontSize: "10.5px",
+                      fontWeight: 800,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
+                  >
+                    <span className="pulse-dot" style={{ background: "var(--primary)", width: "5px", height: "5px" }} />
+                    {pendingLeadsCount} {pendingLeadsCount === 1 ? "pendente" : "pendentes"}
+                  </span>
+                ) : leads.length > 0 ? (
+                  <span
+                    style={{
+                      background: "rgba(255, 255, 255, 0.05)",
+                      color: "var(--text-dim)",
+                      padding: "1px 6px",
+                      borderRadius: "var(--radius-full)",
+                      fontSize: "10.5px",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {leads.length}
+                  </span>
+                ) : null}
+              </div>
             )}
           </button>
 
@@ -1634,10 +1935,12 @@ export default function MasterDashboard() {
                 width: "100%",
                 padding: "10px",
                 background: "var(--primary)",
-                color: "#FFF",
-                fontWeight: 700,
+                color: "#06080D",
+                fontWeight: 800,
                 fontSize: "12.5px",
+                borderRadius: "var(--radius-sm)",
                 marginBottom: "12px",
+                boxShadow: "0 2px 10px rgba(158, 232, 36, 0.2)",
               }}
             >
               <Plus size={15} strokeWidth={2.5} />
@@ -1767,9 +2070,11 @@ export default function MasterDashboard() {
                 style={{
                   padding: "8px 16px",
                   background: "var(--primary)",
-                  color: "#FFF",
-                  fontWeight: 700,
+                  color: "#06080D",
+                  fontWeight: 800,
                   fontSize: "12.5px",
+                  borderRadius: "var(--radius-sm)",
+                  boxShadow: "0 2px 10px rgba(158, 232, 36, 0.2)",
                 }}
               >
                 <Plus size={15} strokeWidth={2.5} />
@@ -2059,7 +2364,7 @@ export default function MasterDashboard() {
                                 <a
                                   href={`https://wa.me/55${cleanPhone}?text=Ol%C3%A1%20${encodeURIComponent(
                                     t.owner_name || t.name
-                                  )}%2C%20falo%20do%20suporte%20KVNS.`}
+                                  )}%2C%20falo%20do%20suporte%20GIRAVO.`}
                                   target="_blank"
                                   rel="noreferrer"
                                   title="Falar no WhatsApp"
@@ -2161,7 +2466,7 @@ export default function MasterDashboard() {
                                 transition: "all 0.12s ease",
                               }}
                               onMouseEnter={(e) => {
-                                e.currentTarget.style.background = "rgba(242, 107, 33, 0.08)";
+                                e.currentTarget.style.background = "rgba(158, 232, 36, 0.1)";
                                 e.currentTarget.style.borderColor = "var(--primary)";
                               }}
                               onMouseLeave={(e) => {
@@ -2551,14 +2856,15 @@ export default function MasterDashboard() {
                   </button>
 
                   {/* Device toggle */}
-                  <div style={{ display: "flex", border: "1px solid var(--border-subtle)", marginLeft: "6px" }}>
+                  <div style={{ display: "flex", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-sm)", marginLeft: "6px", overflow: "hidden" }}>
                     <button
                       onClick={() => setOperationalDeviceMode("desktop")}
                       title="Visão Desktop"
                       style={{
                         padding: "6px 10px",
                         background: operationalDeviceMode === "desktop" ? "var(--primary)" : "transparent",
-                        color: operationalDeviceMode === "desktop" ? "#FFF" : "var(--text-dim)",
+                        color: operationalDeviceMode === "desktop" ? "#06080D" : "var(--text-dim)",
+                        fontWeight: 700,
                       }}
                     >
                       <Monitor size={14} />
@@ -2569,7 +2875,8 @@ export default function MasterDashboard() {
                       style={{
                         padding: "6px 10px",
                         background: operationalDeviceMode === "mobile" ? "var(--primary)" : "transparent",
-                        color: operationalDeviceMode === "mobile" ? "#FFF" : "var(--text-dim)",
+                        color: operationalDeviceMode === "mobile" ? "#06080D" : "var(--text-dim)",
+                        fontWeight: 700,
                       }}
                     >
                       <Smartphone size={14} />
@@ -2612,8 +2919,9 @@ export default function MasterDashboard() {
                         background:
                           operationalData?.companySettings?.primaryColor ||
                           currentOperationalTenant.company_settings?.primaryColor ||
-                          "#F26B21",
-                        color: "#FFF",
+                          "#9EE824",
+                        color: "#06080D",
+                        borderRadius: "var(--radius-sm)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -2678,9 +2986,10 @@ export default function MasterDashboard() {
                             fontSize: "10.5px",
                             fontWeight: 700,
                             padding: "2px 6px",
-                            background: enabled ? "rgba(242, 107, 33, 0.15)" : "rgba(255, 255, 255, 0.05)",
+                            borderRadius: "4px",
+                            background: enabled ? "rgba(158, 232, 36, 0.15)" : "rgba(255, 255, 255, 0.05)",
                             color: enabled ? "var(--primary)" : "var(--text-dim)",
-                            border: `1px solid ${enabled ? "rgba(242, 107, 33, 0.35)" : "var(--border-subtle)"}`,
+                            border: `1px solid ${enabled ? "rgba(158, 232, 36, 0.35)" : "var(--border-subtle)"}`,
                           }}
                         >
                           {enabled ? "✓ " : "✗ "}
@@ -3149,8 +3458,9 @@ export default function MasterDashboard() {
                     style={{
                       fontSize: "10px",
                       padding: "1px 5px",
-                      background: chatFilterTab === "OPEN" ? "rgba(242, 107, 33, 0.25)" : "rgba(255,255,255,0.06)",
+                      background: chatFilterTab === "OPEN" ? "rgba(158, 232, 36, 0.2)" : "rgba(255,255,255,0.06)",
                       color: chatFilterTab === "OPEN" ? "var(--primary)" : "var(--text-dim)",
+                      borderRadius: "var(--radius-full)",
                       fontWeight: 700,
                     }}
                   >
@@ -3286,14 +3596,15 @@ export default function MasterDashboard() {
                           alignItems: "center",
                         }}
                       >
-                        {/* Avatar com borda reta */}
+                        {/* Avatar do cliente */}
                         <div
                           style={{
                             width: "42px",
                             height: "42px",
+                            borderRadius: "var(--radius-sm)",
                             background: isSelected ? "var(--primary)" : "#131826",
                             border: "1px solid var(--border-subtle)",
-                            color: isSelected ? "#FFF" : "var(--primary)",
+                            color: isSelected ? "#06080D" : "var(--primary)",
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
@@ -3492,7 +3803,7 @@ export default function MasterDashboard() {
                   <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
                     {currentChatTenant.phone && (
                       <a
-                        href={`https://wa.me/55${currentChatTenant.phone.replace(/\D/g, "")}?text=Ol%C3%A1%20${encodeURIComponent(currentChatTenant.owner_name || currentChatTenant.name)}%2C%20falo%20do%20suporte%20Master%20KVNS.`}
+                        href={`https://wa.me/55${currentChatTenant.phone.replace(/\D/g, "")}?text=Ol%C3%A1%20${encodeURIComponent(currentChatTenant.owner_name || currentChatTenant.name)}%2C%20falo%20do%20suporte%20Master%20GIRAVO.`}
                         target="_blank"
                         rel="noreferrer"
                         title="Abrir WhatsApp Externo"
@@ -3701,7 +4012,7 @@ export default function MasterDashboard() {
                         letterSpacing: "0.04em",
                       }}
                     >
-                      Canal de Atendimento Direto KVNS Pro
+                      Canal de Atendimento Direto GIRAVO Pro
                     </span>
                   </div>
 
@@ -3795,7 +4106,7 @@ export default function MasterDashboard() {
                   </span>
                   {[
                     "✅ Liberamos mais dias de teste para sua oficina!",
-                    "👋 Olá! Sou o suporte técnico KVNS. Como posso te ajudar hoje?",
+                    "👋 Olá! Sou o suporte técnico GIRAVO. Como posso te ajudar hoje?",
                     "🔧 Seus módulos de checklist e fotos já estão liberados.",
                     "⏳ Notamos que seu teste de 14 dias está perto do fim.",
                     "🔒 Suas permissões foram atualizadas com sucesso.",
@@ -3869,11 +4180,13 @@ export default function MasterDashboard() {
                     style={{
                       padding: "11px 18px",
                       background: newChatText.trim() ? "var(--primary)" : "var(--bg-card-subtle)",
-                      color: "#FFF",
+                      color: newChatText.trim() ? "#06080D" : "#FFF",
+                      borderRadius: "var(--radius-sm)",
                       fontWeight: 800,
                       fontSize: "13px",
                       height: "42px",
                       opacity: newChatText.trim() ? 1 : 0.6,
+                      boxShadow: newChatText.trim() ? "0 2px 10px rgba(158, 232, 36, 0.25)" : "none",
                     }}
                   >
                     <Send size={15} />
@@ -3893,72 +4206,641 @@ export default function MasterDashboard() {
         {/* ABA 4: LEADS & PROSPECÇÃO (VISUAL RETO) */}
         {/* ================================================================== */}
         {activeNav === "leads" && (
-          <div>
-            <div style={{ marginBottom: "16px" }}>
-              <h3 style={{ fontSize: "16px", color: "#FFF", margin: 0 }}>
-                Solicitações de Teste de 14 Dias (Leads das Landing Pages)
-              </h3>
-              <p style={{ color: "var(--text-muted)", fontSize: "12.5px", marginTop: "3px" }}>
-                Oficinas mecânicas que se cadastraram no formulário e aguardam ativação
-              </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            {/* Header & Explicação do Novo Fluxo */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px" }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <h3 style={{ fontSize: "18px", color: "#FFF", margin: 0, fontWeight: 800 }}>
+                    Solicitações de Teste de 14 Dias
+                  </h3>
+                  {pendingLeadsCount > 0 && (
+                    <span
+                      style={{
+                        background: "rgba(158, 232, 36, 0.18)",
+                        color: "var(--primary)",
+                        border: "1px solid rgba(158, 232, 36, 0.4)",
+                        padding: "3px 10px",
+                        borderRadius: "var(--radius-full)",
+                        fontSize: "11px",
+                        fontWeight: 800,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      <span className="pulse-dot" style={{ background: "var(--primary)", width: "6px", height: "6px" }} />
+                      {pendingLeadsCount} {pendingLeadsCount === 1 ? "oficina aguarda aprovação" : "oficinas aguardam aprovação"}
+                    </span>
+                  )}
+                </div>
+                <p style={{ color: "var(--text-muted)", fontSize: "13px", marginTop: "4px" }}>
+                  Oficinas que solicitaram teste de 14 dias pela landing page sem senha prévia.
+                  Apenas oficinas aprovadas pelo Master recebem senha de acesso e são criadas no sistema.
+                </p>
+              </div>
+
+              {/* Botão de atualização rápida */}
+              <button
+                type="button"
+                onClick={() => {
+                  fetchLeads();
+                  showToast("Lista de solicitações sincronizada!", "info");
+                }}
+                style={{
+                  background: "var(--bg-card-subtle)",
+                  border: "1px solid var(--border-subtle)",
+                  color: "#FFF",
+                  padding: "8px 14px",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  cursor: "pointer",
+                }}
+              >
+                <RefreshCw size={13} />
+                <span>Atualizar Lista</span>
+              </button>
             </div>
 
-            <div className="glass-panel" style={{ overflowX: "auto" }}>
+            {/* KPI Cards / Filtros Rápidos de Status */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: "12px",
+              }}
+            >
+              {/* Card 1: Aguardando Aprovação */}
+              <div
+                className="glass-panel"
+                onClick={() => setLeadFilterTab("PENDING")}
+                style={{
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  borderRadius: "var(--radius-md)",
+                  border: leadFilterTab === "PENDING" ? "1px solid var(--primary)" : "1px solid var(--border-subtle)",
+                  background: leadFilterTab === "PENDING" ? "rgba(158, 232, 36, 0.08)" : "var(--bg-card)",
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "11px", color: "var(--primary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                    Aguardando Aprovação
+                  </span>
+                  <Clock size={16} color="var(--primary)" />
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
+                  <h3 style={{ fontSize: "28px", fontWeight: 900, color: "#FFF", margin: 0 }}>
+                    {pendingLeadsCount}
+                  </h3>
+                  <span style={{ fontSize: "11.5px", color: pendingLeadsCount > 0 ? "var(--primary)" : "var(--text-dim)" }}>
+                    {pendingLeadsCount > 0 ? "Ação pendente" : "Tudo em dia"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Card 2: Aprovadas & Liberadas */}
+              <div
+                className="glass-panel"
+                onClick={() => setLeadFilterTab("APPROVED")}
+                style={{
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  borderRadius: "var(--radius-md)",
+                  border: leadFilterTab === "APPROVED" ? "1px solid var(--emerald)" : "1px solid var(--border-subtle)",
+                  background: leadFilterTab === "APPROVED" ? "rgba(16, 185, 129, 0.08)" : "var(--bg-card)",
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "11px", color: "var(--emerald)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                    Aprovadas & Liberadas
+                  </span>
+                  <CheckCircle2 size={16} color="var(--emerald)" />
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
+                  <h3 style={{ fontSize: "28px", fontWeight: 900, color: "var(--emerald)", margin: 0 }}>
+                    {approvedLeadsCount}
+                  </h3>
+                  <span style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>Contas ativas</span>
+                </div>
+              </div>
+
+              {/* Card 3: Recusadas */}
+              <div
+                className="glass-panel"
+                onClick={() => setLeadFilterTab("REJECTED")}
+                style={{
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  borderRadius: "var(--radius-md)",
+                  border: leadFilterTab === "REJECTED" ? "1px solid var(--rose)" : "1px solid var(--border-subtle)",
+                  background: leadFilterTab === "REJECTED" ? "rgba(239, 68, 68, 0.08)" : "var(--bg-card)",
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "11px", color: "var(--rose)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                    Recusadas / Inativas
+                  </span>
+                  <Ban size={16} color="var(--rose)" />
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
+                  <h3 style={{ fontSize: "28px", fontWeight: 900, color: "#CBD5E1", margin: 0 }}>
+                    {rejectedLeadsCount}
+                  </h3>
+                  <span style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>Não liberadas</span>
+                </div>
+              </div>
+
+              {/* Card 4: Total de Solicitações */}
+              <div
+                className="glass-panel"
+                onClick={() => setLeadFilterTab("ALL")}
+                style={{
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  borderRadius: "var(--radius-md)",
+                  border: leadFilterTab === "ALL" ? "1px solid rgba(255, 255, 255, 0.4)" : "1px solid var(--border-subtle)",
+                  background: leadFilterTab === "ALL" ? "rgba(255, 255, 255, 0.05)" : "var(--bg-card)",
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                    Todas as Solicitações
+                  </span>
+                  <Users size={16} color="var(--text-muted)" />
+                </div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
+                  <h3 style={{ fontSize: "28px", fontWeight: 900, color: "#FFF", margin: 0 }}>
+                    {leads.length}
+                  </h3>
+                  <span style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>Recebidas</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Barra de Filtros e Busca */}
+            <div
+              className="glass-panel"
+              style={{
+                padding: "14px 18px",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "14px",
+                alignItems: "center",
+                justifyContent: "space-between",
+                borderRadius: "var(--radius-md)",
+              }}
+            >
+              {/* Abas em formato Pill */}
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                {[
+                  { id: "PENDING", label: "Aguardando Aprovação", count: pendingLeadsCount, color: "var(--primary)" },
+                  { id: "APPROVED", label: "Aprovadas", count: approvedLeadsCount, color: "var(--emerald)" },
+                  { id: "REJECTED", label: "Recusadas", count: rejectedLeadsCount, color: "var(--rose)" },
+                  { id: "ALL", label: "Todas", count: leads.length, color: "#FFF" },
+                ].map((tab) => {
+                  const isActive = leadFilterTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setLeadFilterTab(tab.id as any)}
+                      style={{
+                        padding: "7px 14px",
+                        fontSize: "12px",
+                        fontWeight: isActive ? 800 : 600,
+                        borderRadius: "var(--radius-full)",
+                        background: isActive ? tab.color : "var(--bg-card-subtle)",
+                        color: isActive ? "#06080D" : "var(--text-muted)",
+                        border: isActive ? `1px solid ${tab.color}` : "1px solid var(--border-subtle)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <span>{tab.label}</span>
+                      <span
+                        style={{
+                          background: isActive ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.08)",
+                          padding: "1px 6px",
+                          borderRadius: "var(--radius-full)",
+                          fontSize: "10.5px",
+                        }}
+                      >
+                        {tab.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Caixa de Pesquisa */}
+              <div style={{ position: "relative", minWidth: "260px", flex: 1, maxWidth: "400px" }}>
+                <Search
+                  size={15}
+                  color="var(--text-dim)"
+                  style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)" }}
+                />
+                <input
+                  type="text"
+                  placeholder="Buscar por oficina, nome, email ou telefone..."
+                  value={leadSearchTerm}
+                  onChange={(e) => setLeadSearchTerm(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px 8px 36px",
+                    fontSize: "12.5px",
+                    borderRadius: "var(--radius-sm)",
+                  }}
+                />
+                {leadSearchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setLeadSearchTerm("")}
+                    style={{
+                      position: "absolute",
+                      right: "10px",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      color: "var(--text-dim)",
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      padding: "2px",
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Tabela de Solicitações */}
+            <div className="glass-panel" style={{ overflowX: "auto", borderRadius: "var(--radius-md)" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
                 <thead>
-                  <tr style={{ background: "rgba(8, 11, 17, 0.95)", color: "var(--text-muted)", borderBottom: "1px solid var(--border-subtle)", fontSize: "11px", textTransform: "uppercase" }}>
-                    <th style={{ padding: "12px 16px" }}>Oficina / Responsável</th>
-                    <th style={{ padding: "12px 16px" }}>Contatos</th>
-                    <th style={{ padding: "12px 16px" }}>Origem & Data</th>
-                    <th style={{ padding: "12px 16px" }}>Observações</th>
-                    <th style={{ padding: "12px 16px", textAlign: "right" }}>Ação Comercial</th>
+                  <tr
+                    style={{
+                      background: "rgba(8, 11, 17, 0.95)",
+                      color: "var(--text-muted)",
+                      borderBottom: "1px solid var(--border-subtle)",
+                      fontSize: "11px",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px",
+                    }}
+                  >
+                    <th style={{ padding: "14px 18px" }}>Oficina & Responsável</th>
+                    <th style={{ padding: "14px 18px" }}>Status da Solicitação</th>
+                    <th style={{ padding: "14px 18px" }}>Contatos & WhatsApp</th>
+                    <th style={{ padding: "14px 18px" }}>Origem & Data</th>
+                    <th style={{ padding: "14px 18px" }}>Observações</th>
+                    <th style={{ padding: "14px 18px", textAlign: "right" }}>Ações do Master</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {leads.length === 0 ? (
+                  {filteredLeads.length === 0 ? (
                     <tr>
-                      <td colSpan={5} style={{ padding: "40px", textAlign: "center", color: "var(--text-dim)" }}>
-                        Nenhum lead pendente no momento.
+                      <td colSpan={6} style={{ padding: "60px 20px", textAlign: "center", color: "var(--text-dim)" }}>
+                        <div style={{ maxWidth: "420px", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
+                          <div
+                            style={{
+                              width: "48px",
+                              height: "48px",
+                              borderRadius: "var(--radius-full)",
+                              background: "rgba(158, 232, 36, 0.1)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <Sparkles size={22} color="var(--primary)" />
+                          </div>
+                          <strong style={{ color: "#FFF", fontSize: "14px" }}>
+                            Nenhuma solicitação encontrada
+                          </strong>
+                          <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>
+                            {leadSearchTerm
+                              ? `Não há resultados para "${leadSearchTerm}". Tente outros termos.`
+                              : leadFilterTab === "PENDING"
+                              ? "Nenhuma oficina aguardando aprovação no momento. Quando alguém se cadastrar na landing page, aparecerá aqui instantaneamente!"
+                              : "Nenhuma solicitação nesta categoria."}
+                          </p>
+                        </div>
                       </td>
                     </tr>
                   ) : (
-                    leads.map((l) => (
-                      <tr key={l.id} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-                        <td style={{ padding: "14px 16px" }}>
-                          <strong style={{ color: "#FFF", fontSize: "13.5px" }}>{l.name}</strong>
-                          <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>
-                            {l.workshop_name || "Oficina não informada"}
-                          </div>
-                        </td>
-                        <td style={{ padding: "14px 16px" }}>
-                          <div style={{ color: "#E2E8F0" }}>{l.email}</div>
-                          <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>{l.phone}</div>
-                        </td>
-                        <td style={{ padding: "14px 16px" }}>
-                          <span style={{ background: "rgba(56, 189, 248, 0.15)", color: "#38BDF8", padding: "2px 6px", fontSize: "11px", fontWeight: 700 }}>
-                            {l.origin || "Site Principal"}
-                          </span>
-                          <div style={{ color: "var(--text-dim)", fontSize: "11px", marginTop: "3px" }}>
-                            {new Date(l.created_at).toLocaleDateString("pt-BR")}
-                          </div>
-                        </td>
-                        <td style={{ padding: "14px 16px", color: "var(--text-muted)" }}>{l.notes || "Interesse em teste de 14 dias"}</td>
-                        <td style={{ padding: "14px 16px", textAlign: "right" }}>
-                          <button
-                            onClick={() => handleConvertLead(l)}
-                            style={{
-                              background: "var(--primary)",
-                              color: "#FFF",
-                              padding: "6px 12px",
-                              fontWeight: 700,
-                              fontSize: "12px",
-                            }}
-                          >
-                            <Plus size={13} /> Criar Oficina
-                          </button>
-                        </td>
-                      </tr>
-                    ))
+                    filteredLeads.map((l) => {
+                      const isPending = isPendingStatus(l.status);
+                      const isApproved = isApprovedStatus(l.status);
+                      const isRejected = isRejectedStatus(l.status);
+
+                      return (
+                        <tr
+                          key={l.id}
+                          style={{
+                            borderBottom: "1px solid var(--border-subtle)",
+                            background: isPending ? "rgba(158, 232, 36, 0.02)" : "transparent",
+                            transition: "background 0.1s ease",
+                          }}
+                        >
+                          {/* Oficina & Responsável */}
+                          <td style={{ padding: "16px 18px" }}>
+                            <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                              <div
+                                style={{
+                                  width: "36px",
+                                  height: "36px",
+                                  borderRadius: "var(--radius-sm)",
+                                  background: isPending ? "rgba(158, 232, 36, 0.15)" : isApproved ? "rgba(16, 185, 129, 0.15)" : "rgba(255,255,255,0.06)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <Building2
+                                  size={18}
+                                  color={isPending ? "var(--primary)" : isApproved ? "var(--emerald)" : "var(--text-muted)"}
+                                />
+                              </div>
+                              <div>
+                                <strong style={{ color: "#FFF", fontSize: "14px", display: "block" }}>
+                                  {l.workshop_name || "Oficina não nomeada"}
+                                </strong>
+                                <div style={{ color: "var(--text-muted)", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", marginTop: "2px" }}>
+                                  <User size={12} color="var(--text-dim)" />
+                                  <span>{l.name || "Responsável"}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Status Badge */}
+                          <td style={{ padding: "16px 18px" }}>
+                            {isPending ? (
+                              <span
+                                style={{
+                                  background: "rgba(158, 232, 36, 0.15)",
+                                  color: "var(--primary)",
+                                  border: "1px solid rgba(158, 232, 36, 0.35)",
+                                  padding: "4px 10px",
+                                  borderRadius: "var(--radius-full)",
+                                  fontSize: "11px",
+                                  fontWeight: 800,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                }}
+                              >
+                                <span className="pulse-dot" style={{ background: "var(--primary)", width: "6px", height: "6px" }} />
+                                AGUARDA SUA APROVAÇÃO
+                              </span>
+                            ) : isApproved ? (
+                              <span
+                                style={{
+                                  background: "rgba(16, 185, 129, 0.15)",
+                                  color: "var(--emerald)",
+                                  border: "1px solid rgba(16, 185, 129, 0.35)",
+                                  padding: "4px 10px",
+                                  borderRadius: "var(--radius-full)",
+                                  fontSize: "11px",
+                                  fontWeight: 800,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                }}
+                              >
+                                <CheckCircle2 size={13} color="var(--emerald)" />
+                                APROVADA & CRIADA
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  background: "rgba(239, 68, 68, 0.15)",
+                                  color: "var(--rose)",
+                                  border: "1px solid rgba(239, 68, 68, 0.35)",
+                                  padding: "4px 10px",
+                                  borderRadius: "var(--radius-full)",
+                                  fontSize: "11px",
+                                  fontWeight: 700,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                }}
+                              >
+                                <Ban size={13} color="var(--rose)" />
+                                RECUSADA
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Contatos & WhatsApp */}
+                          <td style={{ padding: "16px 18px" }}>
+                            <div style={{ color: "#E2E8F0", fontSize: "12.5px" }}>{l.email || "Sem e-mail"}</div>
+                            {l.phone && (
+                              <a
+                                href={`https://wa.me/55${l.phone.replace(/\D/g, "")}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  color: "#34D399",
+                                  fontSize: "12px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  marginTop: "3px",
+                                  textDecoration: "none",
+                                }}
+                              >
+                                <MessageCircle size={12} />
+                                <span>{l.phone}</span>
+                              </a>
+                            )}
+                          </td>
+
+                          {/* Origem & Data */}
+                          <td style={{ padding: "16px 18px" }}>
+                            <span
+                              style={{
+                                background: "rgba(56, 189, 248, 0.15)",
+                                color: "#38BDF8",
+                                border: "1px solid rgba(56, 189, 248, 0.3)",
+                                padding: "2px 8px",
+                                borderRadius: "var(--radius-sm)",
+                                fontSize: "11px",
+                                fontWeight: 700,
+                              }}
+                            >
+                              {l.origin || "Landing Page"}
+                            </span>
+                            <div style={{ color: "var(--text-dim)", fontSize: "11px", marginTop: "4px" }}>
+                              {l.created_at ? new Date(l.created_at).toLocaleDateString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "Data recente"}
+                            </div>
+                          </td>
+
+                          {/* Observações */}
+                          <td style={{ padding: "16px 18px", color: "var(--text-muted)", fontSize: "12px", maxWidth: "240px" }}>
+                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.notes}>
+                              {l.notes || "Solicitação de Teste de 14 Dias"}
+                            </div>
+                          </td>
+
+                          {/* Ações do Master */}
+                          <td style={{ padding: "16px 18px", textAlign: "right" }}>
+                            {isPending ? (
+                              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartApproval(l)}
+                                  title="Aprovar esta solicitação, definir senha e criar conta da oficina"
+                                  style={{
+                                    background: "var(--primary)",
+                                    color: "#06080D",
+                                    padding: "8px 14px",
+                                    borderRadius: "var(--radius-sm)",
+                                    fontSize: "12px",
+                                    fontWeight: 900,
+                                    border: "none",
+                                    cursor: "pointer",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "6px",
+                                    boxShadow: "0 2px 10px rgba(158, 232, 36, 0.3)",
+                                    transition: "all 0.15s ease",
+                                  }}
+                                >
+                                  <Sparkles size={14} strokeWidth={2.5} />
+                                  <span>Aprovar & Gerar Acesso</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectLead(l.id, l.name || l.workshop_name)}
+                                  title="Recusar esta solicitação (não libera acesso)"
+                                  style={{
+                                    background: "rgba(239, 68, 68, 0.12)",
+                                    color: "var(--rose)",
+                                    border: "1px solid rgba(239, 68, 68, 0.3)",
+                                    padding: "8px 12px",
+                                    borderRadius: "var(--radius-sm)",
+                                    fontSize: "12px",
+                                    fontWeight: 700,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <Ban size={13} />
+                                  <span>Recusar</span>
+                                </button>
+                              </div>
+                            ) : isApproved ? (
+                              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                                {l.phone && (
+                                  <a
+                                    href={`https://wa.me/55${l.phone.replace(/\D/g, "")}?text=${encodeURIComponent(
+                                      getWhatsAppMessageText({
+                                        ownerName: l.name || "Cliente",
+                                        workshopName: l.workshop_name || "sua Oficina",
+                                        email: l.email || "",
+                                        password: "(senha já gerada)",
+                                        url: typeof window !== "undefined" && window.location.origin.includes("3005") ? window.location.origin.replace("3005", "3000") : "https://app.giravo.com.br",
+                                        days: 14,
+                                      })
+                                    )}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="Enviar mensagem pelo WhatsApp"
+                                    style={{
+                                      background: "rgba(37, 211, 102, 0.15)",
+                                      color: "#25D366",
+                                      border: "1px solid rgba(37, 211, 102, 0.35)",
+                                      padding: "7px 12px",
+                                      borderRadius: "var(--radius-sm)",
+                                      fontSize: "11.5px",
+                                      fontWeight: 800,
+                                      textDecoration: "none",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "5px",
+                                    }}
+                                  >
+                                    <MessageSquare size={13} />
+                                    <span>WhatsApp</span>
+                                  </a>
+                                )}
+
+                                {l.tenant_id && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleViewOperational(l.tenant_id!)}
+                                    title="Acessar espelho operacional desta oficina"
+                                    style={{
+                                      background: "var(--bg-card-subtle)",
+                                      border: "1px solid var(--border-subtle)",
+                                      color: "#FFF",
+                                      padding: "7px 12px",
+                                      borderRadius: "var(--radius-sm)",
+                                      fontSize: "11.5px",
+                                      fontWeight: 600,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <Monitor size={12} />
+                                    <span>Ver Oficina</span>
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleReopenLead(l.id)}
+                                  title="Reabrir esta solicitação para aprovação"
+                                  style={{
+                                    background: "rgba(56, 189, 248, 0.15)",
+                                    color: "#38BDF8",
+                                    border: "1px solid rgba(56, 189, 248, 0.35)",
+                                    padding: "6px 12px",
+                                    borderRadius: "var(--radius-sm)",
+                                    fontSize: "11.5px",
+                                    fontWeight: 700,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <RefreshCw size={12} />
+                                  <span>Reabrir</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteLead(l.id)}
+                                  title="Excluir lead permanentemente"
+                                  style={{
+                                    background: "rgba(239, 68, 68, 0.1)",
+                                    color: "var(--rose)",
+                                    border: "1px solid rgba(239, 68, 68, 0.25)",
+                                    padding: "6px 10px",
+                                    borderRadius: "var(--radius-sm)",
+                                    fontSize: "11.5px",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -4218,8 +5100,9 @@ export default function MasterDashboard() {
                       padding: "7px 4px",
                       fontSize: "11px",
                       fontWeight: 700,
+                      borderRadius: "var(--radius-xs)",
                       background: customRemainingDays === preset.days ? "var(--primary)" : "rgba(255, 255, 255, 0.05)",
-                      color: customRemainingDays === preset.days ? "#FFF" : "var(--text-muted)",
+                      color: customRemainingDays === preset.days ? "#06080D" : "var(--text-muted)",
                       border: `1px solid ${customRemainingDays === preset.days ? "var(--primary)" : "var(--border-subtle)"}`,
                     }}
                   >
@@ -4238,6 +5121,7 @@ export default function MasterDashboard() {
                   padding: "10px",
                   background: "var(--bg-card-subtle)",
                   color: "#FFF",
+                  borderRadius: "var(--radius-sm)",
                   fontSize: "12.5px",
                 }}
               >
@@ -4250,9 +5134,11 @@ export default function MasterDashboard() {
                   flex: 1,
                   padding: "10px",
                   background: "var(--primary)",
-                  color: "#FFF",
+                  color: "#06080D",
+                  borderRadius: "var(--radius-sm)",
                   fontWeight: 800,
                   fontSize: "12.5px",
+                  boxShadow: "0 2px 10px rgba(158, 232, 36, 0.2)",
                 }}
               >
                 Salvar Dias Restantes
@@ -4346,8 +5232,9 @@ export default function MasterDashboard() {
                         flex: 1,
                         padding: "7px",
                         background: newDays === d ? "var(--primary)" : "var(--bg-input)",
-                        color: newDays === d ? "#FFF" : "var(--text-muted)",
+                        color: newDays === d ? "#06080D" : "var(--text-muted)",
                         border: `1px solid ${newDays === d ? "var(--primary)" : "var(--border-subtle)"}`,
+                        borderRadius: "var(--radius-xs)",
                         fontSize: "11.5px",
                         fontWeight: 700,
                       }}
@@ -4359,10 +5246,10 @@ export default function MasterDashboard() {
               </div>
 
               <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-                <button type="button" onClick={() => setIsNewModalOpen(false)} style={{ flex: 1, padding: "10px", background: "var(--bg-card-subtle)", color: "#FFF" }}>
+                <button type="button" onClick={() => setIsNewModalOpen(false)} style={{ flex: 1, padding: "10px", background: "var(--bg-card-subtle)", color: "#FFF", borderRadius: "var(--radius-sm)" }}>
                   Cancelar
                 </button>
-                <button type="submit" style={{ flex: 1, padding: "10px", background: "var(--primary)", color: "#FFF", fontWeight: 800 }}>
+                <button type="submit" style={{ flex: 1, padding: "10px", background: "var(--primary)", color: "#06080D", fontWeight: 800, borderRadius: "var(--radius-sm)", boxShadow: "0 2px 10px rgba(158, 232, 36, 0.2)" }}>
                   Criar Oficina
                 </button>
               </div>
@@ -4427,8 +5314,9 @@ export default function MasterDashboard() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       padding: "10px 12px",
-                      background: isChecked ? "rgba(242, 107, 33, 0.08)" : "var(--bg-input)",
-                      border: `1px solid ${isChecked ? "rgba(242, 107, 33, 0.3)" : "var(--border-subtle)"}`,
+                      borderRadius: "var(--radius-sm)",
+                      background: isChecked ? "rgba(158, 232, 36, 0.08)" : "var(--bg-input)",
+                      border: `1px solid ${isChecked ? "rgba(158, 232, 36, 0.3)" : "var(--border-subtle)"}`,
                       cursor: "pointer",
                     }}
                   >
@@ -4737,10 +5625,10 @@ export default function MasterDashboard() {
               </div>
 
               <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
-                <button type="button" onClick={() => setPasswordModalTenant(null)} style={{ flex: 1, padding: "9px", background: "var(--bg-card-subtle)", color: "#FFF", fontSize: "12px" }}>
+                <button type="button" onClick={() => setPasswordModalTenant(null)} style={{ flex: 1, padding: "9px", background: "var(--bg-card-subtle)", color: "#FFF", borderRadius: "var(--radius-sm)", fontSize: "12px" }}>
                   Cancelar
                 </button>
-                <button type="submit" style={{ flex: 1, padding: "9px", background: "var(--primary)", color: "#FFF", fontSize: "12px", fontWeight: 700 }}>
+                <button type="submit" style={{ flex: 1, padding: "9px", background: "var(--primary)", color: "#06080D", borderRadius: "var(--radius-sm)", fontSize: "12px", fontWeight: 800, boxShadow: "0 2px 8px rgba(158, 232, 36, 0.2)" }}>
                   Salvar Senha
                 </button>
               </div>
@@ -4772,14 +5660,14 @@ export default function MasterDashboard() {
             <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               <div>
                 <label style={{ display: "block", fontSize: "11.5px", color: "var(--text-muted)", marginBottom: "4px" }}>Data Final</label>
-                <input type="date" value={exactDateValue} onChange={(e) => setExactDateValue(e.target.value)} style={{ width: "100%", colorScheme: "dark" }} />
+                <input type="date" value={exactDateValue} onChange={(e) => setExactDateValue(e.target.value)} style={{ width: "100%", colorScheme: "dark", borderRadius: "var(--radius-sm)" }} />
               </div>
 
               <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
-                <button type="button" onClick={() => setCalendarModalTenant(null)} style={{ flex: 1, padding: "9px", background: "var(--bg-card-subtle)", color: "#FFF", fontSize: "12px" }}>
+                <button type="button" onClick={() => setCalendarModalTenant(null)} style={{ flex: 1, padding: "9px", background: "var(--bg-card-subtle)", color: "#FFF", borderRadius: "var(--radius-sm)", fontSize: "12px" }}>
                   Cancelar
                 </button>
-                <button type="button" onClick={handleSetExactDate} style={{ flex: 1, padding: "9px", background: "var(--primary)", color: "#FFF", fontSize: "12px", fontWeight: 700 }}>
+                <button type="button" onClick={handleSetExactDate} style={{ flex: 1, padding: "9px", background: "var(--primary)", color: "#06080D", borderRadius: "var(--radius-sm)", fontSize: "12px", fontWeight: 800, boxShadow: "0 2px 8px rgba(158, 232, 36, 0.2)" }}>
                   Atualizar Data
                 </button>
               </div>
@@ -4787,6 +5675,590 @@ export default function MasterDashboard() {
           </div>
         </div>
       )}
+
+      {/* ==================================================================== */}
+      {/* MODAL 1: APROVAÇÃO DE TESTE DE 14 DIAS & GERAÇÃO DE SENHA (MASTER)  */}
+      {/* ==================================================================== */}
+      {approvingLead && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.85)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 120,
+            padding: "20px",
+          }}
+        >
+          <div
+            className="glass-modal"
+            style={{
+              maxWidth: "580px",
+              width: "100%",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              padding: "26px",
+              borderRadius: "var(--radius-lg)",
+              border: "1px solid var(--border-strong)",
+              boxShadow: "0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(158, 232, 36, 0.15)",
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div
+                  style={{
+                    width: "38px",
+                    height: "38px",
+                    borderRadius: "var(--radius-md)",
+                    background: "rgba(158, 232, 36, 0.15)",
+                    border: "1px solid rgba(158, 232, 36, 0.35)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Sparkles size={20} color="var(--primary)" />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: "17px", fontWeight: 800, color: "#FFF", margin: 0 }}>
+                    Aprovação de Teste de 14 Dias
+                  </h3>
+                  <span style={{ fontSize: "12px", color: "var(--primary)", fontWeight: 600 }}>
+                    GIRAVO • Gestão que faz seu negócio girar
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setApprovingLead(null)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--text-dim)",
+                  padding: "4px",
+                  cursor: "pointer",
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Banner de Instrução do Fluxo */}
+            <div
+              style={{
+                background: "rgba(158, 232, 36, 0.08)",
+                border: "1px solid rgba(158, 232, 36, 0.25)",
+                padding: "12px 14px",
+                borderRadius: "var(--radius-sm)",
+                marginBottom: "18px",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "10px",
+              }}
+            >
+              <KeyRound size={16} color="var(--primary)" style={{ flexShrink: 0, marginTop: "2px" }} />
+              <div style={{ fontSize: "12px", color: "#E2E8F0", lineHeight: "1.45" }}>
+                <strong style={{ color: "var(--primary)" }}>Geração de Senha pelo Master Admin:</strong> O cliente enviou o formulário público da landing page sem definir senha. Você define ou gera a senha provisória abaixo e, ao confirmar, a oficina será criada com acesso liberado.
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmApproval} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {/* Linha 1: Oficina e Responsável */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "5px" }}>
+                    Nome da Oficina *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={approvalWorkshopName}
+                    onChange={(e) => setApprovalWorkshopName(e.target.value)}
+                    style={{ width: "100%", borderRadius: "var(--radius-sm)" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "5px" }}>
+                    Nome do Responsável *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={approvalOwnerName}
+                    onChange={(e) => setApprovalOwnerName(e.target.value)}
+                    style={{ width: "100%", borderRadius: "var(--radius-sm)" }}
+                  />
+                </div>
+              </div>
+
+              {/* Linha 2: E-mail e WhatsApp */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "5px" }}>
+                    E-mail de Login do Admin *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={approvalEmail}
+                    onChange={(e) => setApprovalEmail(e.target.value)}
+                    style={{ width: "100%", borderRadius: "var(--radius-sm)" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "5px" }}>
+                    WhatsApp do Cliente *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={approvalPhone}
+                    onChange={(e) => setApprovalPhone(e.target.value)}
+                    style={{ width: "100%", borderRadius: "var(--radius-sm)" }}
+                  />
+                </div>
+              </div>
+
+              {/* Linha 3: Bloco de Senha Provisória Gerada */}
+              <div
+                style={{
+                  background: "#080B12",
+                  border: "1px solid rgba(158, 232, 36, 0.3)",
+                  padding: "14px",
+                  borderRadius: "var(--radius-md)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 800, color: "#FFF", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <KeyRound size={14} color="var(--primary)" />
+                    <span>Senha Provisória de Acesso da Oficina *</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setApprovalPassword(generateRandomPassword())}
+                    style={{
+                      background: "rgba(158, 232, 36, 0.15)",
+                      color: "var(--primary)",
+                      border: "1px solid rgba(158, 232, 36, 0.35)",
+                      padding: "4px 8px",
+                      borderRadius: "var(--radius-sm)",
+                      fontSize: "11px",
+                      fontWeight: 800,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
+                  >
+                    <RefreshCw size={12} />
+                    <span>Gerar Outra</span>
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="text"
+                    required
+                    value={approvalPassword}
+                    onChange={(e) => setApprovalPassword(e.target.value)}
+                    style={{
+                      flex: 1,
+                      fontFamily: "monospace",
+                      fontSize: "14px",
+                      fontWeight: 700,
+                      letterSpacing: "1px",
+                      color: "var(--primary)",
+                      background: "#05070B",
+                      border: "1px solid var(--border-strong)",
+                      borderRadius: "var(--radius-sm)",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(approvalPassword);
+                      showToast("Senha copiada para a área de transferência!", "success");
+                    }}
+                    style={{
+                      padding: "8px 12px",
+                      background: "var(--bg-card-subtle)",
+                      border: "1px solid var(--border-subtle)",
+                      color: "#FFF",
+                      borderRadius: "var(--radius-sm)",
+                      fontSize: "11.5px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Copy size={13} />
+                  </button>
+                </div>
+                <span style={{ fontSize: "11px", color: "var(--text-dim)", marginTop: "6px", display: "block" }}>
+                  Você poderá enviar esta senha pelo WhatsApp do cliente com 1 clique assim que aprovar.
+                </span>
+              </div>
+
+              {/* Linha 4: Período de Teste (Validade) */}
+              <div>
+                <label style={{ display: "block", fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "6px" }}>
+                  Período de Teste Gratuito *
+                </label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  {[14, 30, 60].map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setApprovalDays(d)}
+                      style={{
+                        flex: 1,
+                        padding: "8px",
+                        fontSize: "12px",
+                        fontWeight: approvalDays === d ? 800 : 500,
+                        background: approvalDays === d ? "var(--primary)" : "var(--bg-card-subtle)",
+                        color: approvalDays === d ? "#06080D" : "var(--text-muted)",
+                        borderRadius: "var(--radius-sm)",
+                        border: approvalDays === d ? "1px solid var(--primary)" : "1px solid var(--border-subtle)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {d} dias {d === 14 ? "(Padrão)" : ""}
+                    </button>
+                  ))}
+                  <div style={{ width: "90px" }}>
+                    <input
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={approvalDays}
+                      onChange={(e) => setApprovalDays(Number(e.target.value))}
+                      placeholder="Dias"
+                      style={{ width: "100%", borderRadius: "var(--radius-sm)", textAlign: "center" }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Linha 5: Módulos Habilitados */}
+              <div>
+                <label style={{ display: "block", fontSize: "11.5px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "6px" }}>
+                  Módulos Liberados para esta Oficina:
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                  {[
+                    { key: "ordens_servico", label: "Ordens de Serviço" },
+                    { key: "checklist_fotos", label: "Checklist com Fotos" },
+                    { key: "estoque_pecas", label: "Estoque de Peças" },
+                    { key: "pdv_balcao", label: "PDV Balcão" },
+                    { key: "financeiro", label: "Financeiro & Contas" },
+                    { key: "whatsapp_crm", label: "WhatsApp CRM" },
+                    { key: "relatorios", label: "Relatórios & DRE" },
+                  ].map((m) => (
+                    <label
+                      key={m.key}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        fontSize: "11.5px",
+                        color: "#E2E8F0",
+                        background: "#080B12",
+                        padding: "6px 10px",
+                        borderRadius: "var(--radius-sm)",
+                        border: "1px solid var(--border-subtle)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={approvalFeatures[m.key] !== false}
+                        onChange={(e) =>
+                          setApprovalFeatures((prev) => ({
+                            ...prev,
+                            [m.key]: e.target.checked,
+                          }))
+                        }
+                        style={{ accentColor: "var(--primary)" }}
+                      />
+                      <span>{m.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Footer Actions */}
+              <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                <button
+                  type="button"
+                  onClick={() => setApprovingLead(null)}
+                  disabled={approvalLoading}
+                  style={{
+                    flex: 1,
+                    padding: "11px",
+                    background: "var(--bg-card-subtle)",
+                    color: "#FFF",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={approvalLoading}
+                  style={{
+                    flex: 2,
+                    padding: "11px",
+                    background: "var(--primary)",
+                    color: "#06080D",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "13px",
+                    fontWeight: 900,
+                    boxShadow: "0 2px 14px rgba(158, 232, 36, 0.35)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px",
+                    cursor: "pointer",
+                  }}
+                >
+                  {approvalLoading ? (
+                    <>
+                      <RefreshCw size={15} className="animate-spin" />
+                      <span>Criando Conta e Liberando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={16} strokeWidth={2.5} />
+                      <span>Confirmar Aprovação & Criar Acesso</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* MODAL 2: SUCESSO & ENVIO DOS DADOS DE ACESSO VIA WHATSAPP (1-CLIQUE) */}
+      {/* ==================================================================== */}
+      {approvedSuccessData && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.88)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 130,
+            padding: "20px",
+          }}
+        >
+          <div
+            className="glass-modal"
+            style={{
+              maxWidth: "540px",
+              width: "100%",
+              padding: "28px",
+              borderRadius: "var(--radius-lg)",
+              border: "1px solid rgba(158, 232, 36, 0.4)",
+              boxShadow: "0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(158, 232, 36, 0.2)",
+              textAlign: "center",
+            }}
+          >
+            {/* Ícone de Sucesso */}
+            <div
+              style={{
+                width: "56px",
+                height: "56px",
+                borderRadius: "var(--radius-full)",
+                background: "rgba(158, 232, 36, 0.18)",
+                border: "2px solid var(--primary)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto 16px",
+              }}
+            >
+              <CheckCircle2 size={32} color="var(--primary)" />
+            </div>
+
+            <h3 style={{ fontSize: "20px", fontWeight: 900, color: "#FFF", margin: "0 0 6px" }}>
+              Oficina Aprovada com Sucesso! 🚀
+            </h3>
+            <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: "0 0 20px" }}>
+              A conta da oficina <strong>{approvedSuccessData.lead.workshop_name || approvedSuccessData.lead.name}</strong> foi provisionada no banco de dados com teste de 14 dias ativo.
+            </p>
+
+            {/* Card com os Dados de Acesso */}
+            <div
+              style={{
+                background: "#080B12",
+                border: "1px solid var(--border-strong)",
+                borderRadius: "var(--radius-md)",
+                padding: "16px",
+                textAlign: "left",
+                marginBottom: "20px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>Link de Acesso</span>
+                  <div style={{ color: "#38BDF8", fontSize: "13px", fontWeight: 700 }}>
+                    {approvedSuccessData.workshopUrl}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(approvedSuccessData.workshopUrl);
+                    showToast("Link copiado!", "success");
+                  }}
+                  style={{
+                    background: "var(--bg-card-subtle)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "#FFF",
+                    padding: "4px 8px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "11px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Copy size={12} />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>E-mail de Login</span>
+                  <div style={{ color: "#FFF", fontSize: "13px", fontWeight: 700 }}>
+                    {approvedSuccessData.lead.email}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(approvedSuccessData.lead.email);
+                    showToast("E-mail copiado!", "success");
+                  }}
+                  style={{
+                    background: "var(--bg-card-subtle)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "#FFF",
+                    padding: "4px 8px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "11px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Copy size={12} />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>Senha Provisória Gerada</span>
+                  <div style={{ color: "var(--primary)", fontSize: "14px", fontWeight: 800, fontFamily: "monospace" }}>
+                    {approvedSuccessData.password}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(approvedSuccessData.password);
+                    showToast("Senha copiada!", "success");
+                  }}
+                  style={{
+                    background: "rgba(158, 232, 36, 0.15)",
+                    border: "1px solid rgba(158, 232, 36, 0.35)",
+                    color: "var(--primary)",
+                    padding: "4px 8px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  <Copy size={12} />
+                </button>
+              </div>
+
+              <div>
+                <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>Validade do Teste</span>
+                <div style={{ color: "#34D399", fontSize: "12.5px", fontWeight: 600 }}>
+                  14 Dias (expira em {approvedSuccessData.expiresAt ? new Date(approvedSuccessData.expiresAt).toLocaleDateString("pt-BR") : "14 dias"})
+                </div>
+              </div>
+            </div>
+
+            {/* Ação Principal: WhatsApp com 1 Clique */}
+            {approvedSuccessData.lead.phone ? (
+              <a
+                href={`https://wa.me/55${approvedSuccessData.lead.phone.replace(/\D/g, "")}?text=${encodeURIComponent(
+                  getWhatsAppMessageText({
+                    ownerName: approvedSuccessData.lead.name || "Proprietário",
+                    workshopName: approvedSuccessData.lead.workshop_name || "sua Oficina",
+                    email: approvedSuccessData.lead.email || "",
+                    password: approvedSuccessData.password,
+                    url: approvedSuccessData.workshopUrl,
+                    days: 14,
+                  })
+                )}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  width: "100%",
+                  padding: "13px",
+                  background: "#25D366",
+                  color: "#06080D",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "14px",
+                  fontWeight: 900,
+                  textDecoration: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  marginBottom: "10px",
+                  boxShadow: "0 4px 16px rgba(37, 211, 102, 0.35)",
+                }}
+              >
+                <MessageSquare size={17} />
+                <span>Enviar Dados de Acesso no WhatsApp do Cliente</span>
+              </a>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => setApprovedSuccessData(null)}
+              style={{
+                width: "100%",
+                padding: "10px",
+                background: "var(--bg-card-subtle)",
+                color: "#FFF",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "12.5px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Concluir e Fechar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

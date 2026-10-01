@@ -137,7 +137,7 @@ export async function POST(req: NextRequest) {
   try {
     const isMaster = await verifyRequestAuth(req);
     const body = await req.json();
-    const { tenantId, sender = "MASTER", senderName = "Suporte Master KVNS", text } = body;
+    const { tenantId, sender = "MASTER", senderName = "Suporte Master GIRAVO", text } = body;
 
     // Se tentar enviar como MASTER mas não for autenticado
     if (sender === "MASTER" && !isMaster) {
@@ -157,7 +157,7 @@ export async function POST(req: NextRequest) {
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       tenantId,
       sender: sender === "CLIENT" ? "CLIENT" : "MASTER",
-      senderName: senderName || (sender === "CLIENT" ? "Cliente Oficina" : "Suporte Master KVNS"),
+      senderName: senderName || (sender === "CLIENT" ? "Cliente Oficina" : "Suporte Master GIRAVO"),
       text: text.trim(),
       timestamp: new Date().toISOString(),
       read: sender === "MASTER",

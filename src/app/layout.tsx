@@ -2,12 +2,12 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "KVNS Master Admin | Gestão Centralizada de Oficinas",
-  description: "Painel de controle master para gerenciamento de oficinas parceiras, vencimentos, assinaturas e permissões de módulos.",
+  title: "GIRAVO Master Admin | Gestão que faz o seu negócio girar",
+  description: "Painel de controle master GIRAVO para gestão centralizada de oficinas, auto centers e revendas, controle de vencimentos, assinaturas e permissões.",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#080B11",
+  themeColor: "#06080D",
   width: "device-width",
   initialScale: 1,
 };

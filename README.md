@@ -1,6 +1,6 @@
-# 🛠️ KVNS Master Admin - Plataforma de Gestão de Oficinas
+# ⚡ GIRAVO Master Admin - Gestão que faz seu negócio girar
 
-Painel administrativo centralizado para gerenciamento multi-tenant de oficinas mecânicas conectadas à base de dados PostgreSQL Neon / Vercel.
+Painel administrativo centralizado para gerenciamento multi-tenant de oficinas, auto centers e revendas conectadas à plataforma GIRAVO.
 
 ## 🚀 Funcionalidades
 

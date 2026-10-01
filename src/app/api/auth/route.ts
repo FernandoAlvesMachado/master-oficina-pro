@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSessionToken, verifyRequestAuth, COOKIE_NAME } from "@/lib/auth";
+import { createSessionToken, verifyRequestAuth, COOKIE_NAME, LEGACY_COOKIE_NAME } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
       const sessionToken = await createSessionToken();
       const response = NextResponse.json({
         success: true,
-        message: "Acesso autorizado ao Master Admin",
+        message: "Acesso autorizado ao GIRAVO Master Admin",
       });
 
       // Cookie criptografado, HTTP-only e com SameSite Strict
@@ -98,5 +98,6 @@ export async function GET(req: NextRequest) {
 export async function DELETE() {
   const response = NextResponse.json({ success: true, message: "Sessão encerrada com segurança" });
   response.cookies.delete(COOKIE_NAME);
+  response.cookies.delete(LEGACY_COOKIE_NAME);
   return response;
 }
