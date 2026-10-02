@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { query, hashPassword, ensureTablesExist } from "@/lib/db";
+import { query, hashPassword, ensureTablesOnce, withTransaction } from "@/lib/db";
 import { verifyRequestAuth } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    await ensureTablesExist();
+    await ensureTablesOnce();
 
     const tenants = await query(`
       SELECT 
@@ -262,8 +262,33 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "tenantId é obrigatório" }, { status: 400 });
     }
 
-    await query("DELETE FROM tenants WHERE id = $1", [tenantId]);
-    return NextResponse.json({ success: true });
+    const deleted = await withTransaction(async (client) => {
+      const exists = await client.query("SELECT id FROM tenants WHERE id = $1 FOR UPDATE", [tenantId]);
+      if (!exists.rowCount) return null;
+
+      // Remove dados em qualquer tabela atual ou futura que pertençam ao tenant.
+      // Os nomes vêm exclusivamente do catálogo do PostgreSQL e são escapados pelo servidor.
+      const tables = await client.query<{ table_name: string }>(`
+        SELECT DISTINCT table_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND column_name = 'tenant_id'
+          AND table_name <> 'tenants'
+        ORDER BY table_name
+      `);
+      const counts: Record<string, number> = {};
+      for (const { table_name: tableName } of tables.rows) {
+        const safeTableName = '"' + tableName.replace(/"/g, '""') + '"';
+        const result = await client.query(`DELETE FROM ${safeTableName} WHERE tenant_id = $1`, [tenantId]);
+        counts[tableName] = result.rowCount || 0;
+      }
+      await client.query("DELETE FROM tenants WHERE id = $1", [tenantId]);
+      return counts;
+    });
+
+    if (!deleted) {
+      return NextResponse.json({ success: false, error: "Conta não encontrada." }, { status: 404 });
+    }
+    return NextResponse.json({ success: true, deleted });
   } catch (err: any) {
     console.error("Erro ao deletar tenant:", err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

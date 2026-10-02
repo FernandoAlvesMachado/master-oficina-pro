@@ -151,6 +151,7 @@ export default function MasterDashboard() {
       vehiclesCount: number;
     };
     serviceOrders: any[];
+    inspectionPhotos: any[];
     products: any[];
     companySettings: any;
     hasRealData: boolean;
@@ -1020,13 +1021,18 @@ export default function MasterDashboard() {
     }
 
     try {
-      const res = await fetch(`/api/tenants?tenantId=${tenantId}`, {
+      const res = await fetch(`/api/tenants?tenantId=${encodeURIComponent(tenantId)}`, {
         method: "DELETE",
       });
       const data = await res.json();
       if (data.success) {
-        showToast(`Oficina "${tenantName}" removida.`, "info");
+        setChatMessages((prev) => prev.filter((message) => message.tenantId !== tenantId));
+        setSelectedChatTenantId((current) => current === tenantId ? "" : current);
+        setSelectedOperationalTenantId((current) => current === tenantId ? "" : current);
+        showToast(`Oficina "${tenantName}" e todos os dados vinculados foram removidos.`, "info");
         fetchTenants();
+      } else {
+        showToast(data.error || "Não foi possível excluir a conta.", "error");
       }
     } catch (err: any) {
       showToast("Erro ao excluir: " + err.message, "error");
@@ -3062,6 +3068,41 @@ export default function MasterDashboard() {
                     </span>
                   </div>
                 </div>
+
+                {operationalData?.inspectionPhotos && operationalData.inspectionPhotos.length > 0 && (
+                  <section style={{ padding: "20px", borderTop: "1px solid var(--border-subtle)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", marginBottom: "12px" }}>
+                      <div>
+                        <h4 style={{ fontSize: "14px", fontWeight: 800, color: "#FFF", margin: 0 }}>Galeria de vistorias</h4>
+                        <p style={{ margin: "3px 0 0", color: "var(--text-dim)", fontSize: "11.5px" }}>
+                          Fotos reais enviadas pela oficina, inclusive vistorias ainda sem O.S. vinculada.
+                        </p>
+                      </div>
+                      <span style={{ fontSize: "11px", color: "#38BDF8", fontWeight: 800 }}>
+                        {operationalData.inspectionPhotos.length} ARQUIVO(S)
+                      </span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "10px" }}>
+                      {operationalData.inspectionPhotos.map((photo: any, index: number) => {
+                        const safeUrl = /^(https?:\/\/|data:image\/|blob:)/i.test(String(photo.url || "")) ? photo.url : "";
+                        return (
+                          <button key={`${photo.url}-${index}`} onClick={() => safeUrl && setSelectedPhotoPreview(safeUrl)} disabled={!safeUrl}
+                            aria-label={`Ampliar ${photo.description || `foto ${index + 1}`}`}
+                            style={{ display: "block", padding: 0, textAlign: "left", overflow: "hidden", background: "#080B12", border: "1px solid var(--border-subtle)" }}>
+                            {safeUrl ? (
+                              <img src={safeUrl} alt={photo.description || `Foto ${index + 1}`} loading="lazy" style={{ width: "100%", height: "112px", objectFit: "cover", display: "block" }} />
+                            ) : (
+                              <div style={{ height: "112px", display: "grid", placeItems: "center" }}><Camera size={26} color="var(--text-dim)" /></div>
+                            )}
+                            <span style={{ display: "block", padding: "8px 9px", color: "#FFF", fontSize: "10.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {photo.osId || "Vistoria"} · {photo.description || `Foto ${index + 1}`}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                )}
 
                 {/* Simulated Workshop Real Work Orders Table */}
                 <div style={{ padding: "20px" }}>
@@ -5577,17 +5618,11 @@ export default function MasterDashboard() {
               </button>
             </div>
 
-            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px" }}>{selectedPhotoPreview}</p>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "18px" }}>
-              {["Pneu & Roda Dianteira", "Lataria Frontal / Para-choque", "Painel Odômetro / Combustível", "Traseira / Lanterna"].map((photo, i) => (
-                <div key={photo} style={{ background: "#06080D", border: "1px solid var(--border-subtle)", padding: "14px", textAlign: "center" }}>
-                  <Camera size={28} color="var(--primary)" style={{ opacity: 0.6, margin: "0 auto 6px" }} />
-                  <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#FFF" }}>{photo}</div>
-                  <span style={{ fontSize: "10px", color: "#34D399" }}>Salva na entrada • Vistoria digital</span>
-                </div>
-              ))}
-            </div>
+            <img
+              src={selectedPhotoPreview}
+              alt="Foto ampliada da vistoria"
+              style={{ width: "100%", maxHeight: "68vh", objectFit: "contain", display: "block", background: "#05070B", marginBottom: "18px" }}
+            />
 
             <button onClick={() => setSelectedPhotoPreview(null)} style={{ width: "100%", padding: "10px", background: "var(--bg-card-subtle)", color: "#FFF", fontSize: "12px" }}>
               Fechar Galeria
@@ -6261,4 +6296,3 @@ export default function MasterDashboard() {
     </div>
   );
 }
-

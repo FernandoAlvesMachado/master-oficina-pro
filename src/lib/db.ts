@@ -75,6 +75,7 @@ export function getEnvDiagnostics() {
 declare global {
   // eslint-disable-next-line no-var
   var _giravoPgPool: Pool | undefined;
+  var _giravoSchemaPromise: Promise<{ success: boolean; message: string; tables: string[] }> | undefined;
 }
 
 export function getPool(): Pool {
@@ -112,6 +113,21 @@ export async function query<T = any>(sqlText: string, params: any[] = []): Promi
   try {
     const res = await client.query(sqlText, params);
     return res.rows as T[];
+  } finally {
+    client.release();
+  }
+}
+
+export async function withTransaction<T>(work: (client: import("pg").PoolClient) => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await work(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
   } finally {
     client.release();
   }
@@ -184,15 +200,18 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
       CREATE TABLE IF NOT EXISTS tenant_store (
         tenant_id VARCHAR(64) PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
         company_settings JSONB DEFAULT '{}'::jsonb,
+        chat_data JSONB NOT NULL DEFAULT '{"messages":[],"status":"OPEN"}'::jsonb,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
+      ALTER TABLE tenant_store
+        ADD COLUMN IF NOT EXISTS chat_data JSONB NOT NULL DEFAULT '{"messages":[],"status":"OPEN"}'::jsonb;
     `);
 
     // 5. Tabela chat_messages (Suporte Master x Oficinas)
     await client.query(`
       CREATE TABLE IF NOT EXISTS chat_messages (
         id VARCHAR(64) PRIMARY KEY,
-        tenant_id VARCHAR(64) NOT NULL,
+        tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
         sender VARCHAR(20) NOT NULL,
         sender_name VARCHAR(255),
         text TEXT NOT NULL,
@@ -206,13 +225,62 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
     // 6. Tabela chat_threads (Controle de Atendimento Aberto x Arquivado)
     await client.query(`
       CREATE TABLE IF NOT EXISTS chat_threads (
-        tenant_id VARCHAR(64) PRIMARY KEY,
+        tenant_id VARCHAR(64) PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
         status VARCHAR(20) DEFAULT 'OPEN',
         archived_at TIMESTAMPTZ,
         archived_by VARCHAR(50) DEFAULT 'MASTER',
         last_message_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+
+    // Corrige bancos antigos: garante cascata nas tabelas legadas do chat.
+    await client.query(`
+      DO $$
+      DECLARE constraint_name TEXT;
+      BEGIN
+        IF to_regclass('public.chat_messages') IS NOT NULL THEN
+          SELECT tc.constraint_name INTO constraint_name
+          FROM information_schema.table_constraints tc
+          JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+          WHERE tc.table_schema = 'public' AND tc.table_name = 'chat_messages'
+            AND tc.constraint_type = 'FOREIGN KEY' AND kcu.column_name = 'tenant_id'
+          LIMIT 1;
+          IF constraint_name IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE chat_messages DROP CONSTRAINT %I', constraint_name);
+          END IF;
+          ALTER TABLE chat_messages
+            ADD CONSTRAINT chat_messages_tenant_fk FOREIGN KEY (tenant_id)
+            REFERENCES tenants(id) ON DELETE CASCADE NOT VALID;
+        END IF;
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
+
+    // Migração compatível: consolida o chat antigo em um único JSON por conta.
+    // Só preenche conversas ainda vazias, portanto é segura para executar novamente.
+    await client.query(`
+      UPDATE tenant_store store
+      SET chat_data = jsonb_build_object(
+        'messages', COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'id', message.id,
+            'tenantId', message.tenant_id,
+            'sender', message.sender,
+            'senderName', COALESCE(message.sender_name, ''),
+            'text', message.text,
+            'timestamp', message.created_at,
+            'read', message.read
+          ) ORDER BY message.created_at)
+          FROM chat_messages message WHERE message.tenant_id = store.tenant_id
+        ), '[]'::jsonb),
+        'status', COALESCE((SELECT thread.status FROM chat_threads thread WHERE thread.tenant_id = store.tenant_id), 'OPEN'),
+        'archivedAt', (SELECT thread.archived_at FROM chat_threads thread WHERE thread.tenant_id = store.tenant_id),
+        'lastMessageAt', (SELECT thread.last_message_at FROM chat_threads thread WHERE thread.tenant_id = store.tenant_id)
+      )
+      WHERE jsonb_array_length(COALESCE(store.chat_data->'messages', '[]'::jsonb)) = 0
+        AND EXISTS (SELECT 1 FROM chat_messages message WHERE message.tenant_id = store.tenant_id);
     `);
 
     return {
@@ -223,4 +291,15 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
   } finally {
     client.release();
   }
+}
+
+// Evita repetir CREATE/ALTER/migrações em cada polling do painel dentro da mesma instância serverless.
+export function ensureTablesOnce() {
+  if (!globalThis._giravoSchemaPromise) {
+    globalThis._giravoSchemaPromise = ensureTablesExist().catch((error) => {
+      globalThis._giravoSchemaPromise = undefined;
+      throw error;
+    });
+  }
+  return globalThis._giravoSchemaPromise;
 }

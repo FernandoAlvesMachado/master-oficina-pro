@@ -53,15 +53,26 @@ export async function GET(req: NextRequest) {
       // Combina ordens de serviço tanto do array service_orders quanto de vehicles com O.S. ativa
       const allOrders: any[] = [];
 
+      const normalizePhoto = (photo: any, description = "Foto da vistoria") => {
+        if (typeof photo === "string") return { url: photo, description };
+        if (!photo || typeof photo !== "object") return null;
+        const url = photo.url || photo.dataUrl || photo.data_url || photo.src || photo.image || photo.base64 || "";
+        return url ? {
+          url,
+          description: photo.description || photo.label || photo.name || description,
+          timestamp: photo.timestamp || photo.createdAt || photo.created_at || null,
+        } : null;
+      };
+
       const getPhotosArray = (photosRaw: any): any[] => {
-        if (Array.isArray(photosRaw)) return photosRaw;
+        if (typeof photosRaw === "string") return [normalizePhoto(photosRaw)].filter(Boolean);
+        if (Array.isArray(photosRaw)) {
+          return photosRaw.map((photo, index) => normalizePhoto(photo, `Foto ${index + 1}`)).filter(Boolean);
+        }
         if (photosRaw && typeof photosRaw === "object") {
-          return Object.entries(photosRaw).map(([key, val]: [string, any]) => {
-            if (typeof val === "string") {
-              return { url: val, description: key };
-            }
-            return { url: val?.url || val?.dataUrl || "", description: val?.description || key };
-          });
+          return Object.entries(photosRaw)
+            .map(([key, val]) => normalizePhoto(val, key))
+            .filter(Boolean);
         }
         return [];
       };
@@ -207,19 +218,23 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      // Soma de fotos de vistoria (de ordens + vehicle_checklists)
-      let totalPhotosCount = 0;
-      allOrders.forEach((o) => {
-        totalPhotosCount += Number(o.photosCount || 0);
-      });
+      // Galeria consolidada: inclui fotos associadas e avulsas, sem duplicar URLs.
+      const inspectionPhotos: any[] = [];
+      allOrders.forEach((order) => order.photos.forEach((photo: any) => {
+        inspectionPhotos.push({ ...photo, osId: order.id, vehicle: order.vehicle, plate: order.plate });
+      }));
       checklistsRes.forEach((c: any) => {
-        const cPhotos = Array.isArray(c.photos)
-          ? c.photos.length
-          : c.photos
-          ? Object.keys(c.photos).length
-          : 0;
-        totalPhotosCount += cPhotos;
+        getPhotosArray(c.photos).forEach((photo) => inspectionPhotos.push({
+          ...photo,
+          osId: c.os_id || "Vistoria avulsa",
+          vehicle: "Veículo não identificado",
+          plate: "",
+        }));
       });
+      const uniquePhotos = Array.from(
+        new Map(inspectionPhotos.filter((photo) => photo.url).map((photo) => [photo.url, photo])).values()
+      );
+      const totalPhotosCount = uniquePhotos.length;
 
       // Estoque de Peças
       const stockItemsCount = products.length;
@@ -252,6 +267,7 @@ export async function GET(req: NextRequest) {
             vehiclesCount: vehicles.length,
           },
           serviceOrders: allOrders,
+          inspectionPhotos: uniquePhotos,
           products: products.slice(0, 10),
           companySettings,
           hasRealData,
@@ -277,6 +293,7 @@ export async function GET(req: NextRequest) {
         vehiclesCount: 0,
       },
       serviceOrders: [],
+      inspectionPhotos: [],
       products: [],
       companySettings: {},
       hasRealData: false,

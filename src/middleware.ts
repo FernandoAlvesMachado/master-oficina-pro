@@ -12,8 +12,23 @@ export async function middleware(req: NextRequest) {
     res.headers.set("X-XSS-Protection", "1; mode=block");
     res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
     res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    const devEval = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
+    res.headers.set("Content-Security-Policy", `default-src 'self'; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'${devEval}; connect-src 'self'`);
+    if (process.env.NODE_ENV === "production") {
+      res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
     return res;
   };
+
+  // Bloqueia CSRF em operações que alteram dados. Chamadas internas sem Origin (server-to-server) continuam válidas.
+  if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method)) {
+    const origin = req.headers.get("origin");
+    if (origin && origin !== req.nextUrl.origin) {
+      return applySecurityHeaders(
+        NextResponse.json({ success: false, error: "Origem da requisição não autorizada." }, { status: 403 })
+      );
+    }
+  }
 
   // Permite rota de login (/api/auth via POST), envio de leads da landing page (/api/leads via POST) e requisições OPTIONS (CORS)
   if (
@@ -46,10 +61,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    /*
-     * Intercepta todas as rotas da API
-     */
-    "/api/:path*",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

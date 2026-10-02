@@ -5,11 +5,11 @@ export const LEGACY_COOKIE_NAME = "kvns_master_auth_token";
 const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24; // 24 horas
 
 function getSecretString(): string {
-  return (
-    process.env.MASTER_ADMIN_PASSWORD ||
-    process.env.AUTH_SECRET ||
-    "giravo-secure-master-platform-salt-2026"
-  );
+  const secret = process.env.AUTH_SECRET || process.env.MASTER_ADMIN_PASSWORD;
+  if (!secret && process.env.NODE_ENV === "production") {
+    throw new Error("AUTH_SECRET ou MASTER_ADMIN_PASSWORD precisa estar configurado.");
+  }
+  return secret || "development-only-secret-change-me";
 }
 
 function stringToUint8Array(str: string): Uint8Array {

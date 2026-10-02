@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { createSessionToken, verifyRequestAuth, COOKIE_NAME, LEGACY_COOKIE_NAME } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -36,9 +37,18 @@ export async function POST(req: NextRequest) {
     }
 
     const { password } = await req.json();
-    const configuredPassword = process.env.MASTER_ADMIN_PASSWORD || "admin";
+    const configuredPassword = process.env.MASTER_ADMIN_PASSWORD;
 
-    if (password === configuredPassword) {
+    if (!configuredPassword) {
+      return NextResponse.json(
+        { success: false, error: "Login administrativo não configurado no servidor." },
+        { status: 503 }
+      );
+    }
+
+    const suppliedHash = crypto.createHash("sha256").update(String(password || "")).digest();
+    const expectedHash = crypto.createHash("sha256").update(configuredPassword).digest();
+    if (crypto.timingSafeEqual(suppliedHash, expectedHash)) {
       // Sucesso: reseta tentativas
       loginAttempts.delete(ip);
 
