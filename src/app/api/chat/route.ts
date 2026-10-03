@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyRequestAuth } from "@/lib/auth";
 import { ensureTablesOnce, query } from "@/lib/db";
@@ -7,6 +6,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 type ChatStatus = "OPEN" | "ARCHIVED" | "QUEUE";
+
 type ChatMessage = {
   id: string;
   tenantId: string;
@@ -16,27 +16,6 @@ type ChatMessage = {
   timestamp: string;
   read: boolean;
 };
-
-type ChatData = {
-  messages: ChatMessage[];
-  status: ChatStatus;
-  archivedAt?: string | null;
-  lastMessageAt?: string | null;
-  acceptedAt?: string | null;
-};
-
-const emptyChat = (): ChatData => ({ messages: [], status: "OPEN" });
-
-function normalizeChat(value: unknown): ChatData {
-  const raw = value && typeof value === "object" ? (value as Partial<ChatData>) : {};
-  return {
-    ...raw,
-    messages: Array.isArray(raw.messages) ? raw.messages.slice(-1000) : [],
-    status: ["OPEN", "ARCHIVED", "QUEUE"].includes(String(raw.status))
-      ? (raw.status as ChatStatus)
-      : "OPEN",
-  };
-}
 
 async function requireMaster(req: NextRequest) {
   if (!(await verifyRequestAuth(req))) {
@@ -51,24 +30,61 @@ export async function GET(req: NextRequest) {
   await ensureTablesOnce();
 
   const tenantId = new URL(req.url).searchParams.get("tenantId");
-  const rows = tenantId
-    ? await query(`SELECT tenant_id, chat_data FROM tenant_store WHERE tenant_id = $1`, [tenantId])
-    : await query(`SELECT tenant_id, chat_data FROM tenant_store`);
 
-  const messages: ChatMessage[] = [];
-  const threads: Record<string, any> = {};
-  for (const row of rows) {
-    const chat = normalizeChat(row.chat_data);
-    messages.push(...chat.messages);
-    threads[row.tenant_id] = {
-      tenantId: row.tenant_id,
-      status: chat.status,
-      archivedAt: chat.archivedAt || null,
-      lastMessageAt: chat.lastMessageAt || null,
-    };
+  try {
+    const messageRows = tenantId
+      ? await query(
+          `SELECT id, tenant_id as "tenantId", sender, sender_name as "senderName", text, created_at as "timestamp", read
+           FROM chat_messages
+           WHERE tenant_id = $1
+           ORDER BY created_at ASC`,
+          [tenantId]
+        )
+      : await query(
+          `SELECT id, tenant_id as "tenantId", sender, sender_name as "senderName", text, created_at as "timestamp", read
+           FROM chat_messages
+           ORDER BY created_at ASC`
+        );
+
+    const threadRows = tenantId
+      ? await query(
+          `SELECT tenant_id as "tenantId", status, queue_joined_at as "queueJoinedAt", accepted_at as "acceptedAt", archived_at as "archivedAt", last_message_at as "lastMessageAt"
+           FROM chat_threads
+           WHERE tenant_id = $1`,
+          [tenantId]
+        )
+      : await query(
+          `SELECT tenant_id as "tenantId", status, queue_joined_at as "queueJoinedAt", accepted_at as "acceptedAt", archived_at as "archivedAt", last_message_at as "lastMessageAt"
+           FROM chat_threads`
+        );
+
+    const messages: ChatMessage[] = messageRows.map((m: any) => ({
+      id: String(m.id),
+      tenantId: String(m.tenantId),
+      sender: m.sender === "MASTER" ? "MASTER" : "CLIENT",
+      senderName: String(m.senderName || (m.sender === "MASTER" ? "Suporte Master GIRAVO" : "Cliente Oficina")),
+      text: String(m.text || ""),
+      timestamp: m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString(),
+      read: Boolean(m.read),
+    }));
+
+    const threads: Record<string, any> = {};
+    for (const row of threadRows) {
+      threads[row.tenantId] = {
+        tenantId: row.tenantId,
+        status: ["OPEN", "ARCHIVED", "QUEUE"].includes(row.status) ? row.status : "OPEN",
+        archivedAt: row.archivedAt ? new Date(row.archivedAt).toISOString() : null,
+        lastMessageAt: row.lastMessageAt ? new Date(row.lastMessageAt).toISOString() : null,
+        queueJoinedAt: row.queueJoinedAt ? new Date(row.queueJoinedAt).toISOString() : null,
+        acceptedAt: row.acceptedAt ? new Date(row.acceptedAt).toISOString() : null,
+      };
+    }
+
+    return NextResponse.json({ success: true, messages, threads });
+  } catch (err: any) {
+    console.error("[MASTER CHAT GET ERROR]", err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
-  messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  return NextResponse.json({ success: true, messages, threads });
 }
 
 export async function POST(req: NextRequest) {
@@ -86,29 +102,63 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Mensagem excede o limite de 5.000 caracteres." }, { status: 400 });
   }
 
-  const message: ChatMessage = {
-    id: `msg-${crypto.randomUUID()}`,
-    tenantId,
-    sender: "MASTER",
-    senderName: String(body.senderName || "Suporte Master GIRAVO").slice(0, 255),
-    text,
-    timestamp: new Date().toISOString(),
-    read: true,
-  };
-  const updated = await query(
-    `UPDATE tenant_store
-     SET chat_data = jsonb_set(
-       jsonb_set(COALESCE(chat_data, $2::jsonb), '{messages}',
-         (COALESCE(chat_data->'messages', '[]'::jsonb) || $3::jsonb), true),
-       '{status}', '"OPEN"'::jsonb, true
-     ) || jsonb_build_object('lastMessageAt', $4::text), updated_at = NOW()
-     WHERE tenant_id = $1 RETURNING tenant_id`,
-    [tenantId, JSON.stringify(emptyChat()), JSON.stringify([message]), message.timestamp]
-  );
-  if (!updated.length) {
-    return NextResponse.json({ success: false, error: "Conta não encontrada." }, { status: 404 });
+  const messageId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const timestamp = new Date().toISOString();
+  const sender = "MASTER";
+  const senderName = String(body.senderName || "Suporte Master GIRAVO").slice(0, 255);
+
+  try {
+    // 1. Grava diretamente na tabela oficial chat_messages (que a oficina lê)
+    await query(
+      `INSERT INTO chat_messages (id, tenant_id, sender, sender_name, text, read, created_at)
+       VALUES ($1, $2, $3, $4, $5, true, $6)`,
+      [messageId, tenantId, sender, senderName, text, timestamp]
+    );
+
+    // 2. Garante thread aberta e atualiza last_message_at no chat_threads
+    await query(
+      `INSERT INTO chat_threads (tenant_id, status, accepted_at, last_message_at, updated_at)
+       VALUES ($1, 'OPEN', NOW(), NOW(), NOW())
+       ON CONFLICT (tenant_id)
+       DO UPDATE SET
+         status = 'OPEN',
+         accepted_at = COALESCE(chat_threads.accepted_at, NOW()),
+         last_message_at = NOW(),
+         updated_at = NOW()`,
+      [tenantId]
+    );
+
+    const message: ChatMessage = {
+      id: messageId,
+      tenantId,
+      sender,
+      senderName,
+      text,
+      timestamp,
+      read: true,
+    };
+
+    // 3. Atualiza espelho em tenant_store para compatibilidade caso o registro exista
+    try {
+      await query(
+        `UPDATE tenant_store
+         SET chat_data = jsonb_set(
+           jsonb_set(COALESCE(chat_data, '{"messages":[],"status":"OPEN"}'::jsonb), '{messages}',
+             (COALESCE(chat_data->'messages', '[]'::jsonb) || $2::jsonb), true),
+           '{status}', '"OPEN"'::jsonb, true
+         ) || jsonb_build_object('lastMessageAt', $3::text), updated_at = NOW()
+         WHERE tenant_id = $1`,
+        [tenantId, JSON.stringify([message]), timestamp]
+      );
+    } catch {
+      // Ignora erro no espelho se tenant_store não existir para esse tenant
+    }
+
+    return NextResponse.json({ success: true, message, threadStatus: "OPEN" });
+  } catch (err: any) {
+    console.error("[MASTER CHAT POST ERROR]", err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
-  return NextResponse.json({ success: true, message, threadStatus: "OPEN" });
 }
 
 export async function PATCH(req: NextRequest) {
@@ -121,30 +171,75 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: false, error: "tenantId é obrigatório." }, { status: 400 });
   }
 
-  const rows = await query(`SELECT chat_data FROM tenant_store WHERE tenant_id = $1`, [tenantId]);
-  if (!rows.length) return NextResponse.json({ success: false, error: "Conta não encontrada." }, { status: 404 });
-  const chat = normalizeChat(rows[0].chat_data);
-  const now = new Date().toISOString();
+  let newStatus: ChatStatus = "OPEN";
 
-  if (action === "archive") {
-    chat.status = "ARCHIVED";
-    chat.archivedAt = now;
-    chat.messages = chat.messages.map((message) => ({ ...message, read: true }));
-  } else if (action === "reopen" || action === "accept") {
-    chat.status = "OPEN";
-    chat.archivedAt = null;
-    if (action === "accept") chat.acceptedAt = now;
-  } else if (action === "join_queue") {
-    chat.status = "QUEUE";
-  } else {
-    chat.messages = chat.messages.map((message) =>
-      message.sender === "CLIENT" ? { ...message, read: true } : message
-    );
+  try {
+    if (action === "archive") {
+      newStatus = "ARCHIVED";
+      await query(
+        `INSERT INTO chat_threads (tenant_id, status, archived_at, archived_by, updated_at)
+         VALUES ($1, 'ARCHIVED', NOW(), 'MASTER', NOW())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET status = 'ARCHIVED', archived_at = NOW(), archived_by = 'MASTER', updated_at = NOW()`,
+        [tenantId]
+      );
+      await query(`UPDATE chat_messages SET read = TRUE WHERE tenant_id = $1`, [tenantId]);
+    } else if (action === "accept") {
+      newStatus = "OPEN";
+      await query(
+        `INSERT INTO chat_threads (tenant_id, status, accepted_at, updated_at)
+         VALUES ($1, 'OPEN', NOW(), NOW())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET status = 'OPEN', accepted_at = NOW(), updated_at = NOW()`,
+        [tenantId]
+      );
+    } else if (action === "reopen") {
+      newStatus = "OPEN";
+      await query(
+        `INSERT INTO chat_threads (tenant_id, status, archived_at, updated_at)
+         VALUES ($1, 'OPEN', NULL, NOW())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET status = 'OPEN', archived_at = NULL, updated_at = NOW()`,
+        [tenantId]
+      );
+    } else if (action === "join_queue") {
+      newStatus = "QUEUE";
+      await query(
+        `INSERT INTO chat_threads (tenant_id, status, queue_joined_at, updated_at)
+         VALUES ($1, 'QUEUE', NOW(), NOW())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET status = 'QUEUE', queue_joined_at = NOW(), updated_at = NOW()`,
+        [tenantId]
+      );
+    } else {
+      // Ação padrão: marcar mensagens do cliente como lidas pelo Master
+      await query(
+        `UPDATE chat_messages SET read = TRUE WHERE tenant_id = $1 AND sender = 'CLIENT'`,
+        [tenantId]
+      );
+    }
+
+    // Atualiza espelho jsonb em tenant_store se existir
+    try {
+      await query(
+        `UPDATE tenant_store
+         SET chat_data = jsonb_set(
+           COALESCE(chat_data, '{"messages":[],"status":"OPEN"}'::jsonb),
+           '{status}',
+           to_jsonb($2::text),
+           true
+         ), updated_at = NOW()
+         WHERE tenant_id = $1`,
+        [tenantId, newStatus]
+      );
+    } catch {
+      // Ignora erro no espelho
+    }
+
+    return NextResponse.json({ success: true, status: newStatus });
+  } catch (err: any) {
+    console.error("[MASTER CHAT PATCH ERROR]", err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
-
-  await query(`UPDATE tenant_store SET chat_data = $2::jsonb, updated_at = NOW() WHERE tenant_id = $1`, [
-    tenantId,
-    JSON.stringify(chat),
-  ]);
-  return NextResponse.json({ success: true, status: chat.status });
 }
+

@@ -348,6 +348,10 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
         last_message_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
+      ALTER TABLE chat_threads
+        ADD COLUMN IF NOT EXISTS queue_joined_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS archived_by VARCHAR(50) DEFAULT 'MASTER';
     `);
 
     // Corrige bancos antigos: garante cascata nas tabelas legadas do chat.
@@ -374,29 +378,15 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
       END $$;
     `);
 
-    // Migração compatível: consolida o chat antigo em um único JSON por conta.
-    // Só preenche conversas ainda vazias, portanto é segura para executar novamente.
+    // Garante sincronização bidirecional e que todo tenant com mensagens possua registro na thread
     await client.query(`
-      UPDATE tenant_store store
-      SET chat_data = jsonb_build_object(
-        'messages', COALESCE((
-          SELECT jsonb_agg(jsonb_build_object(
-            'id', message.id,
-            'tenantId', message.tenant_id,
-            'sender', message.sender,
-            'senderName', COALESCE(message.sender_name, ''),
-            'text', message.text,
-            'timestamp', message.created_at,
-            'read', message.read
-          ) ORDER BY message.created_at)
-          FROM chat_messages message WHERE message.tenant_id = store.tenant_id
-        ), '[]'::jsonb),
-        'status', COALESCE((SELECT thread.status FROM chat_threads thread WHERE thread.tenant_id = store.tenant_id), 'OPEN'),
-        'archivedAt', (SELECT thread.archived_at FROM chat_threads thread WHERE thread.tenant_id = store.tenant_id),
-        'lastMessageAt', (SELECT thread.last_message_at FROM chat_threads thread WHERE thread.tenant_id = store.tenant_id)
-      )
-      WHERE jsonb_array_length(COALESCE(store.chat_data->'messages', '[]'::jsonb)) = 0
-        AND EXISTS (SELECT 1 FROM chat_messages message WHERE message.tenant_id = store.tenant_id);
+      INSERT INTO chat_threads (tenant_id, status, last_message_at, updated_at)
+      SELECT DISTINCT m.tenant_id, 'OPEN', MAX(m.created_at), NOW()
+      FROM chat_messages m
+      LEFT JOIN chat_threads t ON t.tenant_id = m.tenant_id
+      WHERE t.tenant_id IS NULL
+      GROUP BY m.tenant_id
+      ON CONFLICT (tenant_id) DO NOTHING;
     `);
 
     return {

@@ -157,16 +157,31 @@ export async function POST(req: NextRequest) {
         amountCents: plan.priceCents,
         expiresAt: tenant.billing_checkout_expires_at,
       };
-      const notified = await query(
-        `UPDATE tenant_store SET chat_data = jsonb_set(
-           jsonb_set(COALESCE(chat_data, '{"messages":[],"status":"OPEN"}'::jsonb), '{messages}',
-             COALESCE(chat_data->'messages', '[]'::jsonb) || $2::jsonb, true),
-           '{status}', '"OPEN"'::jsonb, true
-         ) || jsonb_build_object('lastMessageAt', $3::text), updated_at = NOW()
-         WHERE tenant_id = $1 RETURNING tenant_id`,
-        [tenant.id, JSON.stringify([message]), timestamp]
+      await query(
+        `INSERT INTO chat_messages (id, tenant_id, sender, sender_name, text, read, created_at)
+         VALUES ($1, $2, $3, $4, $5, false, $6)`,
+        [message.id, tenant.id, message.sender, message.senderName, message.text, timestamp]
       );
-      if (!notified.length) return NextResponse.json({ success: false, error: "Canal da oficina não encontrado." }, { status: 404 });
+      await query(
+        `INSERT INTO chat_threads (tenant_id, status, last_message_at, updated_at)
+         VALUES ($1, 'OPEN', NOW(), NOW())
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET status = 'OPEN', last_message_at = NOW(), updated_at = NOW()`,
+        [tenant.id]
+      );
+      try {
+        await query(
+          `UPDATE tenant_store SET chat_data = jsonb_set(
+             jsonb_set(COALESCE(chat_data, '{"messages":[],"status":"OPEN"}'::jsonb), '{messages}',
+               COALESCE(chat_data->'messages', '[]'::jsonb) || $2::jsonb, true),
+             '{status}', '"OPEN"'::jsonb, true
+           ) || jsonb_build_object('lastMessageAt', $3::text), updated_at = NOW()
+           WHERE tenant_id = $1`,
+          [tenant.id, JSON.stringify([message]), timestamp]
+        );
+      } catch {
+        // Ignora erro no espelho caso tenant_store não exista
+      }
       return NextResponse.json({ success: true, message });
     }
 
