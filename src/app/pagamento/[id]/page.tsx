@@ -148,6 +148,7 @@ export default function PagamentoPage() {
   });
   const [isPaid, setIsPaid] = useState(false);
   const [updatingPlan, setUpdatingPlan] = useState(false);
+  const [billingCycle, setBillingCycle] = useState<"monthly" | "annual">("monthly");
 
   // Tab de pagamento selecionada: "card" ou "pix"
   const [paymentTab, setPaymentTab] = useState<"card" | "pix">("card");
@@ -155,15 +156,16 @@ export default function PagamentoPage() {
   // Estado da cópia do PIX
   const [pixCopied, setPixCopied] = useState(false);
 
-  // Estado de configuração da chave Stripe pelo Admin
   const [showKeyConfig, setShowKeyConfig] = useState(false);
   const [inputPublishableKey, setInputPublishableKey] = useState("");
-  const [savingKey, setSavingKey] = useState(false);
-  const [keySaveMessage, setKeySaveMessage] = useState("");
+  const savingKey = false;
+  const keySaveMessage = "";
 
+  // Estado de configuração da chave Stripe pelo Admin
   // Estado de montagem do Stripe Embedded
   const [stripeMounted, setStripeMounted] = useState(false);
   const [stripeLoading, setStripeLoading] = useState(false);
+  const [stripeError, setStripeError] = useState("");
   const stripeCheckoutRef = useRef<any>(null);
 
   // FAQ state
@@ -186,14 +188,15 @@ export default function PagamentoPage() {
       setCatalog(data.catalog || []);
       setCheckoutUrl(data.checkoutUrl || null);
       setClientSecret(data.clientSecret || null);
+      setBillingCycle(data.billingCycle === "annual" ? "annual" : "monthly");
+      setStripeError(data.checkoutError || "");
       if (data.publishableKey) {
         setPublishableKey(data.publishableKey);
-        setInputPublishableKey(data.publishableKey);
       }
       if (data.pix) {
         setPixData(data.pix);
       }
-      setIsPaid(Boolean(data.isPaid || isSuccessRedirect));
+      setIsPaid(Boolean(data.isPaid));
     } catch (err: any) {
       console.error("[FETCH INVOICE]", err);
       setError(err.message || "Erro de conexão ao carregar a fatura.");
@@ -220,6 +223,8 @@ export default function PagamentoPage() {
 
       try {
         setStripeLoading(true);
+        setStripeError("");
+        setStripeMounted(false);
         if (stripeCheckoutRef.current) {
           try {
             stripeCheckoutRef.current.destroy();
@@ -233,10 +238,10 @@ export default function PagamentoPage() {
         if (!stripe || isCancelled) return;
 
         // Stripe Embedded Checkout Page
-        const checkoutInstance = await (stripe as any).createEmbeddedCheckoutPage({
+        const checkoutInstance = await stripe.createEmbeddedCheckoutPage({
           clientSecret,
           onComplete: () => {
-            setIsPaid(true);
+            fetchInvoice();
           },
         });
 
@@ -250,8 +255,9 @@ export default function PagamentoPage() {
         stripeCheckoutRef.current = checkoutInstance;
         checkoutInstance.mount("#stripe-embedded-checkout");
         setStripeMounted(true);
-      } catch (err) {
+      } catch (err: any) {
         console.error("[MOUNT STRIPE EMBEDDED ERROR]", err);
+        setStripeError(err?.message || "Não foi possível carregar o formulário seguro da Stripe.");
       } finally {
         if (!isCancelled) setStripeLoading(false);
       }
@@ -277,7 +283,7 @@ export default function PagamentoPage() {
       const res = await fetch("/api/pagamento", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tenantId: tenant.id, plan: planKey }),
+        body: JSON.stringify({ tenantId: tenant.id, plan: planKey, billingCycle }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -295,37 +301,39 @@ export default function PagamentoPage() {
     }
   };
 
-  const handleSavePublishableKey = async () => {
-    if (!inputPublishableKey.trim().startsWith("pk_")) {
-      alert("A chave publicável deve começar com 'pk_live_' ou 'pk_test_'.");
-      return;
-    }
+  const handleBillingCycle = async (cycle: "monthly" | "annual") => {
+    if (!tenant || !selectedPlan || cycle === billingCycle || updatingPlan) return;
     try {
-      setSavingKey(true);
-      setKeySaveMessage("");
+      setUpdatingPlan(true);
+      setStripeMounted(false);
+      setStripeError("");
+      setPaymentTab("card");
       const res = await fetch("/api/pagamento", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save_publishable_key", publishableKey: inputPublishableKey.trim() }),
+        body: JSON.stringify({ tenantId: tenant.id, plan: selectedPlan.key, billingCycle: cycle }),
       });
       const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Erro ao salvar chave.");
-      }
-      setPublishableKey(inputPublishableKey.trim());
-      setKeySaveMessage("Chave salva com sucesso! Recarregando checkout embutido...");
-      setTimeout(() => {
-        fetchInvoice();
-      }, 1000);
-    } catch (e: any) {
-      alert(e.message || "Erro ao salvar a chave.");
+      if (!res.ok || !data.success) throw new Error(data.error || "Falha ao alterar a forma de cobrança.");
+      setBillingCycle(cycle);
+      setCheckoutUrl(data.checkoutUrl || null);
+      setClientSecret(data.clientSecret || null);
+    } catch (err: any) {
+      setStripeError(err.message || "Não foi possível atualizar o checkout.");
     } finally {
-      setSavingKey(false);
+      setUpdatingPlan(false);
     }
+  };
+
+  const handleSavePublishableKey = () => {
+    alert("Por segurança, configure STRIPE_PUBLISHABLE_KEY nas variáveis do servidor e faça um novo deploy.");
   };
 
   // Cálculo do código PIX
   const currentPriceNumber = selectedPlan ? selectedPlan.priceCents / 100 : 149.9;
+  const annualPriceCents = selectedPlan ? Math.round(selectedPlan.priceCents * 12 * 0.9) : 0;
+  const displayedTotal = billingCycle === "annual" ? annualPriceCents : (selectedPlan?.priceCents || 0);
+  const displayedTotalFormatted = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(displayedTotal / 100);
   const pixCode = generatePixPayload(
     pixData.key,
     pixData.beneficiary,
@@ -811,12 +819,25 @@ export default function PagamentoPage() {
                 </span>
               </div>
 
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "16px" }}>
+                <button type="button" disabled={updatingPlan || isPaid} onClick={() => handleBillingCycle("monthly")} className={`payment-tab-btn ${billingCycle === "monthly" ? "active" : ""}`}>
+                  <CreditCard size={15} /><span>Mensal</span>
+                </button>
+                <button type="button" disabled={updatingPlan || isPaid} onClick={() => handleBillingCycle("annual")} className={`payment-tab-btn ${billingCycle === "annual" ? "active" : ""}`}>
+                  <Sparkles size={15} /><span>Anual · 10% OFF</span>
+                </button>
+              </div>
+
               {/* Detalhes de preço */}
               <div style={{ padding: "14px 0", borderTop: "1px solid var(--border-subtle)", borderBottom: "1px solid var(--border-subtle)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "8px" }}>
-                  <span style={{ color: "var(--text-muted)" }}>Plano {selectedPlan?.name} (Mensal)</span>
-                  <span style={{ color: "#FFF", fontWeight: 700 }}>{selectedPlan?.priceFormatted}</span>
+                  <span style={{ color: "var(--text-muted)" }}>Plano {selectedPlan?.name} ({billingCycle === "annual" ? "Anual" : "Mensal"})</span>
+                  <span style={{ color: "#FFF", fontWeight: 700 }}>{billingCycle === "annual" ? `${selectedPlan?.priceFormatted} × 12` : selectedPlan?.priceFormatted}</span>
                 </div>
+
+                {billingCycle === "annual" && <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "8px" }}>
+                  <span style={{ color: "var(--text-muted)" }}>Desconto anual</span><span style={{ color: "var(--primary)", fontWeight: 800 }}>−10%</span>
+                </div>}
 
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "8px" }}>
                   <span style={{ color: "var(--text-muted)" }}>Taxa de Setup & Implantação</span>
@@ -835,10 +856,10 @@ export default function PagamentoPage() {
                 >
                   <div>
                     <strong style={{ fontSize: "14px", color: "#FFF" }}>Total a Pagar</strong>
-                    <div style={{ fontSize: "11px", color: "var(--text-dim)" }}>Cobrança recorrente mensal</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-dim)" }}>{billingCycle === "annual" ? "Pagamento único · 12 meses de acesso" : "Cobrança recorrente mensal"}</div>
                   </div>
                   <strong style={{ fontSize: "26px", color: "var(--primary)", fontFamily: "var(--font-mono)", fontWeight: 900 }}>
-                    {selectedPlan?.priceFormatted}
+                    {displayedTotalFormatted}
                   </strong>
                 </div>
               </div>
@@ -857,14 +878,7 @@ export default function PagamentoPage() {
                       <CreditCard size={16} />
                       <span>Cartão de Crédito</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentTab("pix")}
-                      className={`payment-tab-btn ${paymentTab === "pix" ? "active" : ""}`}
-                    >
-                      <QrCode size={16} />
-                      <span>PIX Instantâneo</span>
-                    </button>
+                    {billingCycle === "annual" && <div className="payment-tab-btn active"><QrCode size={16} /><span>PIX no formulário</span></div>}
                   </div>
 
                   {/* ABA 1: CARTÃO DE CRÉDITO DIRETO NA TELA */}
@@ -874,13 +888,19 @@ export default function PagamentoPage() {
                         <div>
                           <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
                             <Lock size={13} color="var(--primary)" />
-                            <span>Preencha os dados do cartão diretamente abaixo para concluir:</span>
+                            <span>{billingCycle === "annual" ? "Escolha cartão ou PIX no formulário seguro abaixo:" : "Preencha os dados do cartão diretamente abaixo para concluir:"}</span>
                           </div>
 
                           {stripeLoading && !stripeMounted && (
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "40px 0", color: "var(--text-dim)", fontSize: "13px" }}>
                               <RefreshCw size={16} className="animate-spin" color="var(--primary)" />
                               <span>Carregando formulário seguro de cartão...</span>
+                            </div>
+                          )}
+
+                          {stripeError && (
+                            <div role="alert" style={{ marginBottom: "12px", padding: "12px 14px", borderRadius: "10px", border: "1px solid rgba(239, 68, 68, .35)", background: "rgba(239, 68, 68, .08)", color: "#fca5a5", fontSize: "12px", lineHeight: 1.5 }}>
+                              {stripeError}
                             </div>
                           )}
 
@@ -1020,7 +1040,7 @@ export default function PagamentoPage() {
                             )}
                             <button
                               type="button"
-                              onClick={() => setPaymentTab("pix")}
+                              onClick={() => handleBillingCycle("annual")}
                               style={{
                                 padding: "12px",
                                 background: "rgba(255, 255, 255, 0.05)",
@@ -1037,7 +1057,7 @@ export default function PagamentoPage() {
                               }}
                             >
                               <QrCode size={16} color="var(--primary)" />
-                              <span>Preferir Pagar via PIX com QR Code</span>
+                              <span>Pagar anual via PIX · 10% OFF</span>
                             </button>
                           </div>
                         </div>
@@ -1175,7 +1195,7 @@ export default function PagamentoPage() {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <CreditCard size={14} color="#38BDF8" />
-                  <span>Aceita Visa, Mastercard, Elo, Hipercard, Amex e PIX</span>
+                  <span>{billingCycle === "annual" ? "Cartão ou PIX para o plano anual" : "Pagamento mensal somente no cartão"}</span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <Check size={14} color="var(--primary)" />

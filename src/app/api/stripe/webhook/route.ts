@@ -57,21 +57,45 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (event.type === "checkout.session.completed") {
+    if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
       const session = event.data.object as Stripe.Checkout.Session;
       const tenantId = session.metadata?.tenant_id || session.client_reference_id;
       const stripeCustomerId = customerId(session.customer as string | Stripe.Customer | Stripe.DeletedCustomer | null);
       const subscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id || null;
       const selectedPlan = normalizePlan(session.metadata?.giravo_plan);
+      const isAnnual = session.metadata?.billing_cycle === "annual";
+      const annualPaymentConfirmed = isAnnual && session.payment_status === "paid";
       if (tenantId) {
-        await client.query(
+        if (annualPaymentConfirmed && selectedPlan) {
+          const planDefinition = PLAN_CATALOG[selectedPlan];
+          const paymentId = typeof session.payment_intent === "string" ? session.payment_intent : session.id;
+          await client.query(
+            `INSERT INTO stripe_payments
+              (id, tenant_id, stripe_customer_id, amount_cents, currency, status, paid_at)
+             VALUES ($1, $2, $3, $4, $5, 'PAID', NOW())
+             ON CONFLICT (id) DO UPDATE SET status = 'PAID', paid_at = NOW()`,
+            [paymentId, tenantId, stripeCustomerId, session.amount_total || 0, session.currency || "brl"]
+          );
+          await client.query(
+            `UPDATE tenants SET stripe_customer_id = COALESCE($1, stripe_customer_id),
+               stripe_subscription_id = NULL, billing_status = 'PAID', last_payment_at = NOW(),
+               expires_at = GREATEST(COALESCE(expires_at, NOW()), NOW()) + INTERVAL '1 year',
+               status = 'ACTIVE', billing_block_reason = NULL, billing_failure_reason = NULL,
+               billing_attempt_count = 0, billing_checkout_url = NULL, billing_checkout_expires_at = NULL,
+               plan = $3, max_users = $4, enabled_features = $5::jsonb, pending_plan = NULL, updated_at = NOW()
+             WHERE id = $2`,
+            [stripeCustomerId, tenantId, selectedPlan, planDefinition.maxUsers, JSON.stringify(planDefinition.features)]
+          );
+        } else {
+          await client.query(
           `UPDATE tenants SET stripe_customer_id = COALESCE($1, stripe_customer_id),
              stripe_subscription_id = COALESCE($2, stripe_subscription_id),
              billing_status = 'CHECKOUT_COMPLETED', pending_plan = COALESCE($4, pending_plan), billing_checkout_url = NULL,
              billing_checkout_expires_at = NULL, billing_failure_reason = NULL,
              billing_attempt_count = 0, updated_at = NOW() WHERE id = $3`,
           [stripeCustomerId, subscriptionId, tenantId, selectedPlan]
-        );
+          );
+        }
       }
     }
 

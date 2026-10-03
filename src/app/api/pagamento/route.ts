@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
 import { ensureTablesOnce, query } from "@/lib/db";
 import { getStripe, isStripeConfigured } from "@/lib/stripe";
 import { normalizePlan, PLAN_CATALOG, stripePriceForPlan, PlanKey } from "@/lib/plans";
@@ -17,24 +15,10 @@ function getPublishableKey(): string {
   ).trim();
 }
 
-function saveKeyToEnv(key: string, value: string) {
-  try {
-    const envPath = path.resolve(process.cwd(), ".env.local");
-    let content = "";
-    if (fs.existsSync(envPath)) {
-      content = fs.readFileSync(envPath, "utf-8");
-    }
-    const regex = new RegExp(`^${key}=.*$`, "m");
-    if (regex.test(content)) {
-      content = content.replace(regex, `${key}=${value}`);
-    } else {
-      content = content ? `${content.trim()}\n${key}=${value}\n` : `${key}=${value}\n`;
-    }
-    fs.writeFileSync(envPath, content, "utf-8");
-    process.env[key] = value;
-  } catch (err) {
-    console.error("[SAVE KEY TO ENV]", err);
-  }
+function stripeKeysUseSameMode(secretKey: string, publishableKey: string): boolean {
+  const secretMode = secretKey.startsWith("sk_live_") ? "live" : secretKey.startsWith("sk_test_") ? "test" : "";
+  const publicMode = publishableKey.startsWith("pk_live_") ? "live" : publishableKey.startsWith("pk_test_") ? "test" : "";
+  return Boolean(secretMode && publicMode && secretMode === publicMode);
 }
 
 export async function GET(req: NextRequest) {
@@ -49,7 +33,7 @@ export async function GET(req: NextRequest) {
 
     const rows = await query<any>(
       `SELECT id, name, owner_name, email, phone, plan, status, expires_at,
-              stripe_customer_id, stripe_subscription_id, billing_status,
+              stripe_customer_id, stripe_subscription_id, billing_status, billing_cycle,
               billing_checkout_url, billing_checkout_expires_at, pending_plan, last_payment_at
        FROM tenants WHERE id = $1 LIMIT 1`,
       [tenantId]
@@ -66,6 +50,8 @@ export async function GET(req: NextRequest) {
     const isPaid = ["PAID", "ACTIVE"].includes(tenant.billing_status || "") && tenant.status !== "EXPIRED" && tenant.status !== "BLOCKED";
 
     const publishableKey = getPublishableKey();
+    const secretKey = (process.env.STRIPE_SECRET_KEY || "").trim();
+    let checkoutError: string | null = null;
     let checkoutUrl = tenant.billing_checkout_url as string | null;
     let clientSecret: string | null = null;
     const isCheckoutValid = checkoutUrl && tenant.billing_checkout_expires_at && new Date(tenant.billing_checkout_expires_at) > new Date();
@@ -96,10 +82,11 @@ export async function GET(req: NextRequest) {
           const returnUrl = `${req.nextUrl.origin}/pagamento/${tenant.id}`;
 
           // Se a chave publicável estiver configurada, gera sessão embutida (embedded_page)
-          if (publishableKey) {
+          if (publishableKey && stripeKeysUseSameMode(secretKey, publishableKey)) {
             const session = await stripe.checkout.sessions.create({
               ui_mode: "embedded_page",
               mode: "subscription",
+              allowed_payment_method_types: ["card"],
               customer: customerId,
               line_items: [{ price: priceId, quantity: 1 }],
               return_url: `${returnUrl}?sucesso=1&session_id={CHECKOUT_SESSION_ID}`,
@@ -120,6 +107,7 @@ export async function GET(req: NextRequest) {
             // Modo hosted fallback se ainda não tiver publishable key
             const session = await stripe.checkout.sessions.create({
               mode: "subscription",
+              allowed_payment_method_types: ["card"],
               customer: customerId,
               line_items: [{ price: priceId, quantity: 1 }],
               success_url: `${returnUrl}?sucesso=1`,
@@ -139,7 +127,14 @@ export async function GET(req: NextRequest) {
         }
       } catch (err) {
         console.error("[PAGAMENTO AUTO-CHECKOUT]", err);
+        checkoutError = publicError(err, "Não foi possível iniciar o checkout seguro.");
       }
+    }
+
+    if (!publishableKey) {
+      checkoutError = "Checkout incorporado indisponível: configure STRIPE_PUBLISHABLE_KEY no servidor.";
+    } else if (!stripeKeysUseSameMode(secretKey, publishableKey)) {
+      checkoutError = "As chaves publicável e secreta da Stripe precisam pertencer ao mesmo modo (teste ou produção).";
     }
 
     const priceFormatted = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(planInfo.priceCents / 100);
@@ -179,6 +174,7 @@ export async function GET(req: NextRequest) {
       clientSecret,
       publishableKey,
       isEmbedded: Boolean(publishableKey && clientSecret),
+      checkoutError,
       pix: {
         key: process.env.PIX_KEY || "financeiro@giravo.com.br",
         keyType: process.env.PIX_KEY_TYPE || "E-mail",
@@ -187,6 +183,7 @@ export async function GET(req: NextRequest) {
       },
       isPaid,
       isTrial: tenant.status === "TRIAL",
+      billingCycle: tenant.billing_cycle === "annual" ? "annual" : "monthly",
     });
   } catch (error) {
     console.error("[API PAGAMENTO GET]", error);
@@ -200,18 +197,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
 
     // Ação: Salvar chave publicável da Stripe
-    if (body.action === "save_publishable_key") {
-      const rawKey = typeof body.publishableKey === "string" ? body.publishableKey.trim() : "";
-      if (!rawKey.startsWith("pk_")) {
-        return NextResponse.json({ success: false, error: "A chave publicável deve começar com 'pk_live_' ou 'pk_test_'." }, { status: 400 });
-      }
-      saveKeyToEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY", rawKey);
-      saveKeyToEnv("STRIPE_PUBLISHABLE_KEY", rawKey);
-      return NextResponse.json({ success: true, publishableKey: rawKey });
-    }
-
     const tenantId = typeof body.tenantId === "string" ? body.tenantId : "";
     const requestedPlan = normalizePlan(body.plan);
+    const billingCycle = body.billingCycle === "annual" ? "annual" : "monthly";
 
     if (!tenantId) {
       return NextResponse.json({ success: false, error: "tenantId é obrigatório." }, { status: 400 });
@@ -256,17 +244,30 @@ export async function POST(req: NextRequest) {
     let clientSecret: string | null = null;
     let checkoutUrl: string | null = null;
     let expiresAt: string = "";
+    const planInfo = PLAN_CATALOG[requestedPlan];
+    const annualAmountCents = Math.round(planInfo.priceCents * 12 * 0.9);
+    const lineItems = billingCycle === "annual"
+      ? [{ price_data: { currency: "brl", unit_amount: annualAmountCents, product_data: { name: `GIRAVO ${planInfo.name} - Plano anual`, description: "12 meses de acesso com 10% de desconto" } }, quantity: 1 }]
+      : [{ price: priceId, quantity: 1 }];
+    const sessionMode = billingCycle === "annual" ? "payment" as const : "subscription" as const;
+    const metadata = { tenant_id: tenant.id, giravo_plan: requestedPlan, billing_cycle: billingCycle };
+
+    const secretKey = (process.env.STRIPE_SECRET_KEY || "").trim();
+    if (publishableKey && !stripeKeysUseSameMode(secretKey, publishableKey)) {
+      return NextResponse.json({ success: false, error: "As chaves publicável e secreta da Stripe precisam pertencer ao mesmo modo (teste ou produção)." }, { status: 503 });
+    }
 
     if (publishableKey) {
       const session = await stripe.checkout.sessions.create({
         ui_mode: "embedded_page",
-        mode: "subscription",
+        mode: sessionMode,
         customer: customerId,
-        line_items: [{ price: priceId, quantity: 1 }],
+        line_items: lineItems,
+        allowed_payment_method_types: billingCycle === "annual" ? ["card", "pix"] : ["card"],
         return_url: `${returnUrl}?sucesso=1&session_id={CHECKOUT_SESSION_ID}`,
         client_reference_id: tenant.id,
-        subscription_data: { metadata: { tenant_id: tenant.id, giravo_plan: requestedPlan } },
-        metadata: { tenant_id: tenant.id, giravo_plan: requestedPlan },
+        ...(billingCycle === "monthly" ? { subscription_data: { metadata } } : {}),
+        metadata,
       });
 
       clientSecret = session.client_secret || null;
@@ -275,19 +276,20 @@ export async function POST(req: NextRequest) {
 
       await query(
         `UPDATE tenants SET billing_checkout_url = $1, billing_checkout_expires_at = $2,
-         billing_status = 'CHECKOUT_PENDING', pending_plan = $3, updated_at = NOW() WHERE id = $4`,
-        [clientSecret, expiresAt, requestedPlan, tenant.id]
+         billing_status = 'CHECKOUT_PENDING', pending_plan = $3, billing_cycle = $5, updated_at = NOW() WHERE id = $4`,
+        [clientSecret, expiresAt, requestedPlan, tenant.id, billingCycle]
       );
     } else {
       const session = await stripe.checkout.sessions.create({
-        mode: "subscription",
+        mode: sessionMode,
         customer: customerId,
-        line_items: [{ price: priceId, quantity: 1 }],
+        line_items: lineItems,
+        allowed_payment_method_types: billingCycle === "annual" ? ["card", "pix"] : ["card"],
         success_url: `${returnUrl}?sucesso=1`,
         cancel_url: `${returnUrl}?cancelado=1`,
         client_reference_id: tenant.id,
-        subscription_data: { metadata: { tenant_id: tenant.id, giravo_plan: requestedPlan } },
-        metadata: { tenant_id: tenant.id, giravo_plan: requestedPlan },
+        ...(billingCycle === "monthly" ? { subscription_data: { metadata } } : {}),
+        metadata,
       });
 
       checkoutUrl = session.url;
@@ -295,8 +297,8 @@ export async function POST(req: NextRequest) {
 
       await query(
         `UPDATE tenants SET billing_checkout_url = $1, billing_checkout_expires_at = $2,
-         billing_status = 'CHECKOUT_PENDING', pending_plan = $3, updated_at = NOW() WHERE id = $4`,
-        [session.url, expiresAt, requestedPlan, tenant.id]
+         billing_status = 'CHECKOUT_PENDING', pending_plan = $3, billing_cycle = $5, updated_at = NOW() WHERE id = $4`,
+        [session.url, expiresAt, requestedPlan, tenant.id, billingCycle]
       );
     }
 
@@ -306,6 +308,8 @@ export async function POST(req: NextRequest) {
       clientSecret,
       publishableKey,
       plan: requestedPlan,
+      billingCycle,
+      amountCents: billingCycle === "annual" ? annualAmountCents : planInfo.priceCents,
       expiresAt,
     });
   } catch (error) {
