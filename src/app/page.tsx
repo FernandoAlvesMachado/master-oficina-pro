@@ -65,6 +65,9 @@ import {
   CreditCard,
   ArrowUpRight,
   CircleDollarSign,
+  ArrowLeft,
+  Menu,
+  MoreVertical,
 } from "lucide-react";
 import { GiravoIcon, GiravoLogo, GiravoAppBadge } from "@/components/GiravoBrand";
 import { normalizePlan, PLAN_CATALOG, type PlanKey } from "@/lib/plans";
@@ -305,6 +308,9 @@ export default function MasterDashboard() {
   const [browserNotifEnabled, setBrowserNotifEnabled] = useState(false);
   const [chatThreads, setChatThreads] = useState<Record<string, { tenantId: string; status: "OPEN" | "ARCHIVED" | "QUEUE"; archivedAt?: string | null }>>({});
   const [chatFilterTab, setChatFilterTab] = useState<"OPEN" | "ARCHIVED" | "ALL">("OPEN");
+  // Mobile Navigation & WhatsApp Chat State
+  const [mobileChatView, setMobileChatView] = useState<"list" | "conversation">("list");
+  const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const knownMsgIdsRef = useRef<Set<string>>(new Set());
   const isFirstFetchRef = useRef(true);
@@ -1231,6 +1237,7 @@ export default function MasterDashboard() {
 
   const handleOpenChat = (tenantId: string) => {
     setSelectedChatTenantId(tenantId);
+    setMobileChatView("conversation");
     setActiveNav("chat");
   };
 
@@ -1820,6 +1827,7 @@ export default function MasterDashboard() {
       {/* LEFT SIDEBAR (NAVEGAÇÃO INDUSTRIAL / RETO) */}
       {/* ==================================================================== */}
       <aside
+        className="desktop-only"
         style={{
           width: sidebarCollapsed ? "72px" : "260px",
           background: "var(--bg-sidebar)",
@@ -2224,9 +2232,105 @@ export default function MasterDashboard() {
       {/* ==================================================================== */}
       {/* MAIN CONTENT AREA */}
       {/* ==================================================================== */}
-      <main style={{ flex: 1, padding: "26px 32px 60px", minWidth: 0, overflowX: "hidden" }}>
-        {/* Top Header Bar */}
+      <main className="admin-main-container" style={{ flex: 1, padding: "26px 32px 60px", minWidth: 0, overflowX: "hidden" }}>
+        {/* Mobile Top Bar */}
+        <header className="mobile-top-bar">
+          <div style={{ display: "flex", alignItems: "center", gap: "9px" }}>
+            <div
+              style={{
+                width: "32px",
+                height: "32px",
+                borderRadius: "8px",
+                background: "linear-gradient(145deg, #131A26, #0A0E15)",
+                border: "1px solid rgba(158, 232, 36, 0.3)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.5)",
+              }}
+            >
+              <GiravoIcon size={20} color="var(--primary)" />
+            </div>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <span style={{ fontSize: "14px", fontWeight: 900, color: "#FFF", letterSpacing: "0.02em" }}>
+                  GIRAVO
+                </span>
+                <span
+                  style={{
+                    fontSize: "9px",
+                    fontWeight: 800,
+                    color: "var(--primary)",
+                    background: "rgba(158, 232, 36, 0.12)",
+                    border: "1px solid rgba(158, 232, 36, 0.3)",
+                    padding: "1px 5px",
+                    borderRadius: "3px",
+                  }}
+                >
+                  MASTER
+                </span>
+              </div>
+              <div style={{ fontSize: "10px", color: "var(--text-dim)", fontWeight: 600 }}>
+                {activeNav === "home" && "Visão Geral"}
+                {activeNav === "tenants" && "Oficinas & Clientes"}
+                {activeNav === "operational" && "Espelho Operacional"}
+                {activeNav === "chat" && "Central de Atendimento"}
+                {activeNav === "leads" && "Leads & Testes"}
+                {activeNav === "db" && "Infra & Banco"}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <button
+              type="button"
+              onClick={() => {
+                fetchTenants();
+                if (activeNav === "home") fetchBilling();
+                if (activeNav === "leads") fetchLeads();
+              }}
+              style={{
+                width: "34px",
+                height: "34px",
+                borderRadius: "var(--radius-sm)",
+                background: "var(--bg-card)",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-muted)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+              title="Atualizar dados"
+            >
+              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsMobileDrawerOpen(true)}
+              style={{
+                width: "34px",
+                height: "34px",
+                borderRadius: "var(--radius-sm)",
+                background: "rgba(158, 232, 36, 0.12)",
+                border: "1px solid rgba(158, 232, 36, 0.3)",
+                color: "var(--primary)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+              title="Menu e Opções"
+            >
+              <Menu size={18} />
+            </button>
+          </div>
+        </header>
+
+        {/* Top Header Bar Desktop */}
         <header
+          className="desktop-only"
           style={{
             display: "flex",
             justifyContent: "space-between",
@@ -2485,8 +2589,8 @@ export default function MasterDashboard() {
               </select>
             </div>
 
-            {/* Table */}
-            <div className="glass-panel" style={{ overflowX: "auto" }}>
+            {/* Table Desktop */}
+            <div className="glass-panel desktop-only" style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
                 <thead>
                   <tr
@@ -2964,6 +3068,255 @@ export default function MasterDashboard() {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Lista de Oficinas Mobile (Cards Nativos & Compactos) */}
+            <div className="mobile-only" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {filteredTenants.length === 0 ? (
+                <div className="glass-panel" style={{ padding: "36px 16px", textAlign: "center", color: "var(--text-dim)" }}>
+                  <Users size={32} style={{ margin: "0 auto 10px", opacity: 0.3 }} />
+                  <p style={{ margin: 0, fontSize: "13.5px" }}>Nenhuma oficina encontrada com os filtros atuais.</p>
+                </div>
+              ) : (
+                filteredTenants.map((t) => {
+                  const cleanPhone = (t.phone || "").replace(/\D/g, "");
+                  const isExpired = t.expires_at ? new Date(t.expires_at) < new Date() : false;
+                  const daysRemaining = t.expires_at
+                    ? Math.ceil((new Date(t.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
+                    : 0;
+
+                  return (
+                    <div key={`m-${t.id}`} className="tenant-mobile-card">
+                      {/* Top Header Card: Initial + Name + Status Pill */}
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+                          <div
+                            style={{
+                              width: "38px",
+                              height: "38px",
+                              background: "var(--bg-card-subtle)",
+                              border: "1px solid var(--border-subtle)",
+                              color: "var(--primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontWeight: 800,
+                              fontSize: "13px",
+                              borderRadius: "var(--radius-sm)",
+                              flexShrink: 0,
+                            }}
+                          >
+                            {t.name.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div style={{ minWidth: 0 }}>
+                            <strong style={{ fontSize: "14px", color: "#FFF", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {t.name}
+                            </strong>
+                            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                              {t.owner_name}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" }}>
+                          <span
+                            style={{
+                              padding: "2px 8px",
+                              fontSize: "10.5px",
+                              fontWeight: 800,
+                              borderRadius: "4px",
+                              color:
+                                t.status === "ACTIVE"
+                                  ? "#34D399"
+                                  : t.status === "BLOCKED"
+                                  ? "#F87171"
+                                  : t.status === "EXPIRED"
+                                  ? "#FBBF24"
+                                  : "#22D3EE",
+                              background:
+                                t.status === "ACTIVE"
+                                  ? "rgba(16, 185, 129, 0.15)"
+                                  : t.status === "BLOCKED"
+                                  ? "rgba(239, 68, 68, 0.15)"
+                                  : t.status === "EXPIRED"
+                                  ? "rgba(245, 158, 11, 0.15)"
+                                  : "rgba(34, 211, 238, 0.15)",
+                            }}
+                          >
+                            {t.status}
+                          </span>
+                          <span style={{ fontSize: "9.5px", color: "var(--text-dim)", fontWeight: 700 }}>
+                            {t.plan}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Middle Info: Expiration + Contact */}
+                      <div
+                        style={{
+                          background: "var(--bg-main)",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: "var(--radius-sm)",
+                          padding: "10px 12px",
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr",
+                          gap: "8px",
+                          fontSize: "11.5px",
+                        }}
+                      >
+                        <div>
+                          <span style={{ color: "var(--text-dim)", display: "block", fontSize: "10px", textTransform: "uppercase" }}>
+                            Validade
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDaysModal(t)}
+                            style={{
+                              color: isExpired ? "#F87171" : daysRemaining <= 3 ? "#FBBF24" : "var(--primary)",
+                              fontWeight: 800,
+                              background: "none",
+                              border: "none",
+                              padding: 0,
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              fontSize: "12px",
+                            }}
+                            title="Clique para alterar validade"
+                          >
+                            <Clock size={11} />
+                            <span>{daysRemaining > 0 ? `${daysRemaining} dias rest.` : "Expirado"}</span>
+                          </button>
+                        </div>
+
+                        <div>
+                          <span style={{ color: "var(--text-dim)", display: "block", fontSize: "10px", textTransform: "uppercase" }}>
+                            Operadores
+                          </span>
+                          <span style={{ color: "#FFF", fontWeight: 700 }}>
+                            {t.users_count} {t.max_users ? `/ ${t.max_users}` : ""}
+                          </span>
+                        </div>
+
+                        {t.phone && (
+                          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>
+                              {t.phone}
+                            </span>
+                            {cleanPhone && (
+                              <a
+                                href={`https://wa.me/55${cleanPhone}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  color: "#25D366",
+                                  fontSize: "11px",
+                                  fontWeight: 700,
+                                  textDecoration: "none",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                }}
+                              >
+                                <MessageCircle size={12} />
+                                <span>WhatsApp</span>
+                              </a>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Action Buttons Row */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenChat(t.id)}
+                          style={{
+                            padding: "8px 10px",
+                            background: "rgba(158, 232, 36, 0.12)",
+                            border: "1px solid rgba(158, 232, 36, 0.3)",
+                            color: "var(--primary)",
+                            fontSize: "12px",
+                            fontWeight: 700,
+                            borderRadius: "var(--radius-sm)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "6px",
+                          }}
+                        >
+                          <MessageSquare size={13} />
+                          <span>Chat Suporte</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleViewOperational(t.id)}
+                          style={{
+                            padding: "8px 10px",
+                            background: "var(--bg-card-subtle)",
+                            border: "1px solid var(--border-subtle)",
+                            color: "#FFF",
+                            fontSize: "12px",
+                            fontWeight: 600,
+                            borderRadius: "var(--radius-sm)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "6px",
+                          }}
+                        >
+                          <Monitor size={13} />
+                          <span>Ver Espelho</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setFeaturesModalTenant(t)}
+                          style={{
+                            padding: "7px 10px",
+                            background: "transparent",
+                            border: "1px solid var(--border-subtle)",
+                            color: "var(--text-muted)",
+                            fontSize: "11.5px",
+                            fontWeight: 600,
+                            borderRadius: "var(--radius-sm)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "5px",
+                          }}
+                        >
+                          <Sliders size={12} />
+                          <span>Módulos</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleBlock(t.id, t.status, t.name)}
+                          style={{
+                            padding: "7px 10px",
+                            background: t.status === "BLOCKED" ? "rgba(16, 185, 129, 0.1)" : "rgba(239, 68, 68, 0.1)",
+                            border: `1px solid ${t.status === "BLOCKED" ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
+                            color: t.status === "BLOCKED" ? "#34D399" : "#F87171",
+                            fontSize: "11.5px",
+                            fontWeight: 700,
+                            borderRadius: "var(--radius-sm)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "5px",
+                          }}
+                        >
+                          {t.status === "BLOCKED" ? <Unlock size={12} /> : <Lock size={12} />}
+                          <span>{t.status === "BLOCKED" ? "Desbloquear" : "Bloquear"}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -3578,7 +3931,7 @@ export default function MasterDashboard() {
         {/* ================================================================== */}
         {activeNav === "chat" && (
           <div
-            className="glass-panel"
+            className="glass-panel whatsapp-chat-shell"
             style={{
               height: "calc(100vh - 165px)",
               display: "flex",
@@ -3590,6 +3943,7 @@ export default function MasterDashboard() {
             {/* COLUNA ESQUERDA: LISTA DE CONVERSAS (ORDENADA POR ATIVIDADE)   */}
             {/* -------------------------------------------------------------- */}
             <div
+              className={`whatsapp-chat-sidebar ${mobileChatView === "conversation" ? "mobile-hide" : ""}`}
               style={{
                 width: "350px",
                 borderRight: "1px solid var(--border-subtle)",
@@ -3835,6 +4189,7 @@ export default function MasterDashboard() {
                         key={t.id}
                         onClick={() => {
                           setSelectedChatTenantId(t.id);
+                          setMobileChatView("conversation");
                           markChatAsRead(t.id);
                         }}
                         style={{
@@ -3987,7 +4342,10 @@ export default function MasterDashboard() {
             {/* COLUNA DIREITA: JANELA DO CHAT (ESTILO WHATSAPP WEB DARK)     */}
             {/* -------------------------------------------------------------- */}
             {currentChatTenant ? (
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "var(--bg-card)", minWidth: 0 }}>
+              <div
+                className={`whatsapp-chat-main ${mobileChatView === "list" ? "mobile-hide" : ""}`}
+                style={{ flex: 1, display: "flex", flexDirection: "column", background: "var(--bg-card)", minWidth: 0 }}
+              >
                 {/* Header da Conversa Ativa */}
                 <div
                   style={{
@@ -4000,7 +4358,29 @@ export default function MasterDashboard() {
                     gap: "12px",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+                    {/* Botão Voltar para Lista no Mobile (WhatsApp style) */}
+                    <button
+                      type="button"
+                      onClick={() => setMobileChatView("list")}
+                      className="mobile-only"
+                      style={{
+                        padding: "6px 8px",
+                        background: "rgba(255, 255, 255, 0.08)",
+                        border: "1px solid var(--border-subtle)",
+                        color: "var(--primary)",
+                        borderRadius: "var(--radius-sm)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                      title="Voltar para a lista de conversas"
+                    >
+                      <ArrowLeft size={16} />
+                    </button>
+
                     <div
                       style={{
                         width: "38px",
@@ -4241,14 +4621,14 @@ export default function MasterDashboard() {
 
                 {/* Thread de Mensagens (WhatsApp Web Style) */}
                 <div
+                  className="whatsapp-wallpaper"
                   style={{
                     flex: 1,
-                    padding: "20px 24px",
+                    padding: "16px 14px",
                     overflowY: "auto",
                     display: "flex",
                     flexDirection: "column",
                     gap: "10px",
-                    background: "#080B12",
                   }}
                 >
                   {/* Divisor Informativo Central */}
@@ -4289,7 +4669,7 @@ export default function MasterDashboard() {
                             display: "flex",
                             flexDirection: "column",
                             alignItems: isMaster ? "flex-end" : "flex-start",
-                            maxWidth: "70%",
+                            maxWidth: "clamp(250px, 86%, 560px)",
                             alignSelf: isMaster ? "flex-end" : "flex-start",
                           }}
                         >
@@ -4298,6 +4678,7 @@ export default function MasterDashboard() {
                               background: isMaster ? "#005C4B" : "#202C33",
                               color: "#FFF",
                               border: isMaster ? "1px solid #026b57" : "1px solid #2A3942",
+                              borderRadius: isMaster ? "10px 10px 2px 10px" : "10px 10px 10px 2px",
                               padding: "8px 12px 6px 12px",
                               fontSize: "13px",
                               lineHeight: "1.45",
@@ -4448,8 +4829,34 @@ export default function MasterDashboard() {
                 </div>
               </div>
             ) : (
-              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)" }}>
-                Selecione uma oficina na lista ao lado para conversar.
+              <div
+                className={`whatsapp-chat-main ${mobileChatView === "list" ? "mobile-hide" : ""}`}
+                style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", padding: "24px", textAlign: "center" }}
+              >
+                <MessageSquare size={38} color="var(--primary)" style={{ opacity: 0.35, marginBottom: "12px" }} />
+                <p style={{ margin: 0, fontSize: "14px", color: "#FFF", fontWeight: 700 }}>Nenhuma conversa selecionada</p>
+                <p style={{ margin: "4px 0 16px", fontSize: "12px", color: "var(--text-dim)" }}>
+                  Selecione uma oficina na lista para conversar.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setMobileChatView("list")}
+                  className="mobile-only"
+                  style={{
+                    padding: "8px 16px",
+                    background: "var(--primary)",
+                    color: "#06080D",
+                    fontWeight: 800,
+                    fontSize: "12px",
+                    borderRadius: "var(--radius-sm)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <ArrowLeft size={14} />
+                  <span>Ver Lista de Conversas</span>
+                </button>
               </div>
             )}
           </div>
@@ -4737,8 +5144,8 @@ export default function MasterDashboard() {
               </div>
             </div>
 
-            {/* Tabela de Solicitações */}
-            <div className="glass-panel" style={{ overflowX: "auto", borderRadius: "var(--radius-md)" }}>
+            {/* Tabela de Solicitações Desktop */}
+            <div className="glass-panel desktop-only" style={{ overflowX: "auto", borderRadius: "var(--radius-md)" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
                 <thead>
                   <tr
@@ -5097,6 +5504,217 @@ export default function MasterDashboard() {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Lista de Leads Mobile (Cards Nativos & Interativos) */}
+            <div className="mobile-only" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {filteredLeads.length === 0 ? (
+                <div className="glass-panel" style={{ padding: "36px 16px", textAlign: "center", color: "var(--text-dim)" }}>
+                  <Inbox size={32} style={{ margin: "0 auto 10px", opacity: 0.3 }} />
+                  <p style={{ margin: 0, fontSize: "13.5px" }}>Nenhuma solicitação encontrada nesta aba.</p>
+                </div>
+              ) : (
+                filteredLeads.map((l) => {
+                  const cleanPhone = (l.phone || "").replace(/\D/g, "");
+                  const isPending = l.status === "PENDING" || !l.status;
+                  const isApproved = l.status === "APPROVED";
+                  const isRejected = l.status === "REJECTED";
+
+                  return (
+                    <div key={`m-lead-${l.id}`} className="lead-mobile-card">
+                      {/* Top: Workshop Name & Status Badge */}
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px" }}>
+                        <div>
+                          <strong style={{ fontSize: "14px", color: "#FFF", display: "block" }}>
+                            {l.workshop_name || "Oficina Sem Nome"}
+                          </strong>
+                          <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+                            Responsável: {l.name}
+                          </span>
+                        </div>
+
+                        <span
+                          style={{
+                            padding: "3px 8px",
+                            fontSize: "10px",
+                            fontWeight: 800,
+                            borderRadius: "var(--radius-full)",
+                            color: isApproved ? "#34D399" : isRejected ? "#F87171" : "var(--primary)",
+                            background: isApproved
+                              ? "rgba(16, 185, 129, 0.15)"
+                              : isRejected
+                              ? "rgba(239, 68, 68, 0.15)"
+                              : "rgba(158, 232, 36, 0.15)",
+                            border: `1px solid ${
+                              isApproved
+                                ? "rgba(16, 185, 129, 0.35)"
+                                : isRejected
+                                ? "rgba(239, 68, 68, 0.35)"
+                                : "rgba(158, 232, 36, 0.35)"
+                            }`,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {isApproved ? "Aprovado" : isRejected ? "Recusado" : "Aguardando"}
+                        </span>
+                      </div>
+
+                      {/* Middle: Phone + Date + Origin */}
+                      <div
+                        style={{
+                          background: "var(--bg-main)",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: "var(--radius-sm)",
+                          padding: "10px 12px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "6px",
+                          fontSize: "11.5px",
+                        }}
+                      >
+                        {l.phone && (
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <span style={{ color: "#FFF", fontWeight: 700 }}>{l.phone}</span>
+                            {cleanPhone && (
+                              <a
+                                href={`https://wa.me/55${cleanPhone}?text=Ol%C3%A1%20${encodeURIComponent(l.name)}%2C%20vi%20sua%20solicita%C3%A7%C3%A3o%20de%20teste%20no%20GIRAVO.`}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  color: "#25D366",
+                                  fontWeight: 700,
+                                  textDecoration: "none",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                }}
+                              >
+                                <MessageCircle size={12} />
+                                <span>WhatsApp</span>
+                              </a>
+                            )}
+                          </div>
+                        )}
+                        {l.email && <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>{l.email}</span>}
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "var(--text-dim)", fontSize: "10.5px", paddingTop: "4px", borderTop: "1px solid var(--border-subtle)" }}>
+                          <span>Criado em: {new Date(l.created_at).toLocaleDateString("pt-BR")}</span>
+                          <span>Origem: {l.origin || "Site Oficial"}</span>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        {isPending ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleStartApproval(l)}
+                              style={{
+                                flex: 1,
+                                padding: "9px 12px",
+                                background: "var(--primary)",
+                                color: "#06080D",
+                                fontWeight: 850,
+                                fontSize: "12px",
+                                borderRadius: "var(--radius-sm)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: "6px",
+                              }}
+                            >
+                              <CheckCircle2 size={13} />
+                              <span>Aprovar Teste 14 Dias</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleRejectLead(l.id, l.name || l.workshop_name)}
+                              style={{
+                                padding: "9px 12px",
+                                background: "rgba(239, 68, 68, 0.12)",
+                                border: "1px solid rgba(239, 68, 68, 0.3)",
+                                color: "var(--rose)",
+                                fontWeight: 700,
+                                fontSize: "12px",
+                                borderRadius: "var(--radius-sm)",
+                              }}
+                            >
+                              <X size={13} />
+                            </button>
+                          </>
+                        ) : isApproved && l.tenant_id ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleViewOperational(l.tenant_id!)}
+                              style={{
+                                flex: 1,
+                                padding: "8px 12px",
+                                background: "var(--bg-card-subtle)",
+                                border: "1px solid var(--border-subtle)",
+                                color: "#FFF",
+                                fontWeight: 600,
+                                fontSize: "11.5px",
+                                borderRadius: "var(--radius-sm)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                gap: "6px",
+                              }}
+                            >
+                              <Monitor size={12} />
+                              <span>Ver Oficina</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenChat(l.tenant_id!)}
+                              style={{
+                                padding: "8px 12px",
+                                background: "rgba(158, 232, 36, 0.12)",
+                                border: "1px solid rgba(158, 232, 36, 0.3)",
+                                color: "var(--primary)",
+                                fontWeight: 700,
+                                fontSize: "11.5px",
+                                borderRadius: "var(--radius-sm)",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "5px",
+                              }}
+                            >
+                              <MessageSquare size={12} />
+                              <span>Chat</span>
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleReopenLead(l.id)}
+                            style={{
+                              flex: 1,
+                              padding: "8px 12px",
+                              background: "rgba(56, 189, 248, 0.12)",
+                              border: "1px solid rgba(56, 189, 248, 0.3)",
+                              color: "#38BDF8",
+                              fontWeight: 700,
+                              fontSize: "11.5px",
+                              borderRadius: "var(--radius-sm)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: "6px",
+                            }}
+                          >
+                            <RefreshCw size={12} />
+                            <span>Reabrir Solicitação</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -6631,6 +7249,260 @@ export default function MasterDashboard() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* BARRA DE NAVEGAÇÃO INFERIOR MOBILE (ESTILO APP NATIVO)               */}
+      {/* ==================================================================== */}
+      <nav className="mobile-bottom-nav">
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeNav === "home" ? "active" : ""}`}
+          onClick={() => setActiveNav("home")}
+        >
+          <LayoutDashboard size={20} />
+          <span>Início</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeNav === "tenants" ? "active" : ""}`}
+          onClick={() => setActiveNav("tenants")}
+        >
+          <Building2 size={20} />
+          <span>Oficinas</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeNav === "operational" ? "active" : ""}`}
+          onClick={() => {
+            setActiveNav("operational");
+            if (!selectedOperationalTenantId && tenants.length > 0) {
+              handleViewOperational(tenants[0].id);
+            }
+          }}
+        >
+          <Monitor size={20} />
+          <span>Espelho</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeNav === "chat" ? "active" : ""}`}
+          onClick={() => {
+            setActiveNav("chat");
+            if (!selectedChatTenantId) {
+              setMobileChatView("list");
+            }
+          }}
+        >
+          <div style={{ position: "relative" }}>
+            <MessageSquare size={20} />
+            {totalUnreadMessages > 0 && (
+              <span className="mobile-nav-badge">{totalUnreadMessages}</span>
+            )}
+          </div>
+          <span>Chat</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeNav === "leads" ? "active" : ""}`}
+          onClick={() => setActiveNav("leads")}
+        >
+          <div style={{ position: "relative" }}>
+            <Users size={20} />
+            {pendingLeadsCount > 0 && (
+              <span className="mobile-nav-badge" style={{ background: "var(--primary)", color: "#06080D" }}>
+                {pendingLeadsCount}
+              </span>
+            )}
+          </div>
+          <span>Leads</span>
+        </button>
+
+        <button
+          type="button"
+          className="mobile-nav-item"
+          onClick={() => setIsMobileDrawerOpen(true)}
+        >
+          <MoreVertical size={20} />
+          <span>Mais</span>
+        </button>
+      </nav>
+
+      {/* ==================================================================== */}
+      {/* DRAWER / MENU FLUTUANTE INFERIOR MOBILE                              */}
+      {/* ==================================================================== */}
+      {isMobileDrawerOpen && (
+        <>
+          <div
+            className="mobile-drawer-overlay"
+            onClick={() => setIsMobileDrawerOpen(false)}
+          />
+          <div className="mobile-drawer-sheet">
+            <div style={{ width: "36px", height: "4px", background: "rgba(255,255,255,0.2)", borderRadius: "2px", margin: "0 auto 16px" }} />
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "18px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <GiravoIcon size={24} color="var(--primary)" />
+                <h3 style={{ margin: 0, fontSize: "16px", color: "#FFF", fontWeight: 800 }}>
+                  Opções do Master Admin
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMobileDrawerOpen(false)}
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--text-dim)",
+                  padding: "4px 8px",
+                  cursor: "pointer",
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileDrawerOpen(false);
+                  setIsNewModalOpen(true);
+                }}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  background: "var(--primary)",
+                  color: "#06080D",
+                  borderRadius: "var(--radius-sm)",
+                  fontWeight: 800,
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  gap: "10px",
+                }}
+              >
+                <Plus size={16} />
+                <span>Cadastrar Nova Oficina</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileDrawerOpen(false);
+                  setActiveNav("db");
+                }}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border-subtle)",
+                  color: "#FFF",
+                  borderRadius: "var(--radius-sm)",
+                  fontWeight: 600,
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  gap: "10px",
+                }}
+              >
+                <Database size={16} color="var(--primary)" />
+                <span>Diagnóstico de Conexão Neon</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !soundEnabled;
+                  setSoundEnabled(next);
+                  if (next) playIncomingMessageSound();
+                  showToast(next ? "Som ativado!" : "Som silenciado.", "info");
+                }}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border-subtle)",
+                  color: soundEnabled ? "#34D399" : "var(--text-muted)",
+                  borderRadius: "var(--radius-sm)",
+                  fontWeight: 600,
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  {soundEnabled ? <Volume2 size={16} color="#34D399" /> : <VolumeX size={16} color="var(--rose)" />}
+                  <span>Notificação Sonora do Chat</span>
+                </div>
+                <span style={{ fontSize: "11px", fontWeight: 700 }}>
+                  {soundEnabled ? "Ativo" : "Silenciado"}
+                </span>
+              </button>
+
+              {!browserNotifEnabled && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    requestBrowserNotificationPermission();
+                    setIsMobileDrawerOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "#38BDF8",
+                    borderRadius: "var(--radius-sm)",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "flex-start",
+                    gap: "10px",
+                  }}
+                >
+                  <Bell size={16} color="#38BDF8" />
+                  <span>Ativar Notificações do Navegador</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileDrawerOpen(false);
+                  handleLogout();
+                }}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  background: "rgba(239, 68, 68, 0.12)",
+                  border: "1px solid rgba(239, 68, 68, 0.3)",
+                  color: "#F87171",
+                  borderRadius: "var(--radius-sm)",
+                  fontWeight: 700,
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  gap: "10px",
+                  marginTop: "6px",
+                }}
+              >
+                <LogOut size={16} />
+                <span>Sair do Master Admin</span>
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
