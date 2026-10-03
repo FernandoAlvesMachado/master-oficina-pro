@@ -217,11 +217,18 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
         amount_cents INTEGER NOT NULL DEFAULT 0,
         currency VARCHAR(10) NOT NULL DEFAULT 'brl',
         status VARCHAR(50) NOT NULL,
+        plan VARCHAR(50),
+        billing_cycle VARCHAR(20),
+        service_until TIMESTAMPTZ,
         paid_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_stripe_payments_tenant_paid
         ON stripe_payments(tenant_id, paid_at DESC);
+      ALTER TABLE stripe_payments
+        ADD COLUMN IF NOT EXISTS plan VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS billing_cycle VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS service_until TIMESTAMPTZ;
       CREATE TABLE IF NOT EXISTS stripe_webhook_events (
         id VARCHAR(255) PRIMARY KEY,
         event_type VARCHAR(100) NOT NULL,

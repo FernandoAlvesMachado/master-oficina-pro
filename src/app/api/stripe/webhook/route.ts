@@ -71,16 +71,20 @@ export async function POST(req: NextRequest) {
           const paymentId = typeof session.payment_intent === "string" ? session.payment_intent : session.id;
           await client.query(
             `INSERT INTO stripe_payments
-              (id, tenant_id, stripe_customer_id, amount_cents, currency, status, paid_at)
-             VALUES ($1, $2, $3, $4, $5, 'PAID', NOW())
-             ON CONFLICT (id) DO UPDATE SET status = 'PAID', paid_at = NOW()`,
-            [paymentId, tenantId, stripeCustomerId, session.amount_total || 0, session.currency || "brl"]
+              (id, tenant_id, stripe_customer_id, amount_cents, currency, status, plan, billing_cycle, service_until, paid_at)
+             VALUES ($1, $2, $3, $4, $5, 'PAID', $6, 'annual',
+               (SELECT GREATEST(COALESCE(expires_at, NOW()), NOW()) + INTERVAL '1 year' FROM tenants WHERE id = $2), NOW())
+             ON CONFLICT (id) DO UPDATE SET status = 'PAID', plan = EXCLUDED.plan,
+               billing_cycle = 'annual', service_until = EXCLUDED.service_until, paid_at = NOW()`,
+            [paymentId, tenantId, stripeCustomerId, session.amount_total || 0, session.currency || "brl", selectedPlan]
           );
           await client.query(
             `UPDATE tenants SET stripe_customer_id = COALESCE($1, stripe_customer_id),
                stripe_subscription_id = NULL, billing_status = 'PAID', last_payment_at = NOW(),
                expires_at = GREATEST(COALESCE(expires_at, NOW()), NOW()) + INTERVAL '1 year',
-               status = 'ACTIVE', billing_block_reason = NULL, billing_failure_reason = NULL,
+               status = CASE WHEN status <> 'BLOCKED' OR billing_block_reason = 'PAYMENT_OVERDUE' THEN 'ACTIVE' ELSE status END,
+               billing_block_reason = CASE WHEN billing_block_reason = 'PAYMENT_OVERDUE' THEN NULL ELSE billing_block_reason END,
+               billing_failure_reason = NULL,
                billing_attempt_count = 0, billing_checkout_url = NULL, billing_checkout_expires_at = NULL,
                plan = $3, max_users = $4, enabled_features = $5::jsonb, pending_plan = NULL, updated_at = NOW()
              WHERE id = $2`,
@@ -120,36 +124,44 @@ export async function POST(req: NextRequest) {
       const stripeCustomerId = customerId(invoice.customer);
       const status = event.type === "invoice.paid" ? "PAID" : "FAILED";
       const invoiceTenantId = invoice.parent?.subscription_details?.metadata?.tenant_id || null;
-      const tenant = await client.query<{ id: string; pending_plan: string | null }>(
-        `SELECT id, pending_plan FROM tenants
+      const tenant = await client.query<{ id: string; pending_plan: string | null; plan: string | null }>(
+        `SELECT id, pending_plan, plan FROM tenants
          WHERE ($1::text IS NOT NULL AND stripe_customer_id = $1)
             OR ($2::text IS NOT NULL AND id = $2) LIMIT 1`,
         [stripeCustomerId, invoiceTenantId]
       );
+      const currentPlan = normalizePlan(tenant.rows[0]?.pending_plan || tenant.rows[0]?.plan);
+      const servicePeriodEnd = invoice.lines.data.reduce((latest, line) => Math.max(latest, line.period?.end || 0), 0);
       await client.query(
         `INSERT INTO stripe_payments
-          (id, tenant_id, stripe_customer_id, stripe_invoice_id, amount_cents, currency, status, paid_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, paid_at = EXCLUDED.paid_at`,
+          (id, tenant_id, stripe_customer_id, stripe_invoice_id, amount_cents, currency, status, plan, billing_cycle, service_until, paid_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'monthly',
+           CASE WHEN $9::double precision > 0 THEN to_timestamp($9::double precision) ELSE NULL END, $10)
+         ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, plan = EXCLUDED.plan,
+           billing_cycle = EXCLUDED.billing_cycle, service_until = EXCLUDED.service_until, paid_at = EXCLUDED.paid_at`,
         [invoice.id, tenant.rows[0]?.id || null, stripeCustomerId, invoice.id, invoice.amount_paid || invoice.amount_due || 0,
-          invoice.currency, status, status === "PAID" ? new Date((invoice.status_transitions.paid_at || invoice.created) * 1000) : null]
+          invoice.currency, status, currentPlan, servicePeriodEnd,
+          status === "PAID" ? new Date((invoice.status_transitions.paid_at || invoice.created) * 1000) : null]
       );
       if (tenant.rows[0]) {
         if (status === "PAID") {
-          const selectedPlan = normalizePlan(tenant.rows[0].pending_plan);
+          const selectedPlan = normalizePlan(tenant.rows[0].pending_plan || tenant.rows[0].plan);
           const planDefinition = selectedPlan ? PLAN_CATALOG[selectedPlan] : null;
           await client.query(
             `UPDATE tenants SET billing_status = 'PAID', last_payment_at = NOW(),
                stripe_last_invoice_id = $1, billing_grace_until = NULL,
                billing_failure_reason = NULL, billing_attempt_count = 0,
                billing_checkout_url = NULL, billing_checkout_expires_at = NULL,
-               status = CASE WHEN billing_block_reason = 'PAYMENT_OVERDUE' THEN 'ACTIVE' ELSE status END,
+               expires_at = CASE WHEN $6::double precision > 0 THEN to_timestamp($6::double precision)
+                 ELSE GREATEST(COALESCE(expires_at, NOW()), NOW()) + INTERVAL '1 month' END,
+               billing_cycle = 'monthly',
+               status = CASE WHEN status IN ('EXPIRED', 'TRIAL') OR billing_block_reason = 'PAYMENT_OVERDUE' THEN 'ACTIVE' ELSE status END,
                billing_block_reason = CASE WHEN billing_block_reason = 'PAYMENT_OVERDUE' THEN NULL ELSE billing_block_reason END,
                plan = COALESCE($3, plan), max_users = COALESCE($4, max_users),
                enabled_features = COALESCE($5::jsonb, enabled_features), pending_plan = NULL,
                updated_at = NOW() WHERE id = $2`,
             [invoice.id, tenant.rows[0].id, selectedPlan, planDefinition?.maxUsers || null,
-              planDefinition ? JSON.stringify(planDefinition.features) : null]
+              planDefinition ? JSON.stringify(planDefinition.features) : null, servicePeriodEnd]
           );
           if (planDefinition) {
             // Em downgrade, preserva os acessos mais antigos (priorizando ADMIN)

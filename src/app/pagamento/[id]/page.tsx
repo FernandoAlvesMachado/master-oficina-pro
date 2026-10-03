@@ -166,7 +166,9 @@ export default function PagamentoPage() {
   const [stripeMounted, setStripeMounted] = useState(false);
   const [stripeLoading, setStripeLoading] = useState(false);
   const [stripeError, setStripeError] = useState("");
+  const [confirmingPayment, setConfirmingPayment] = useState(false);
   const stripeCheckoutRef = useRef<any>(null);
+  const stripeActionsRef = useRef<any>(null);
 
   // FAQ state
   const [openFaq, setOpenFaq] = useState<number | null>(null);
@@ -227,7 +229,7 @@ export default function PagamentoPage() {
         setStripeMounted(false);
         if (stripeCheckoutRef.current) {
           try {
-            stripeCheckoutRef.current.destroy();
+            stripeCheckoutRef.current.unmount();
           } catch (_) {}
           stripeCheckoutRef.current = null;
         }
@@ -237,23 +239,35 @@ export default function PagamentoPage() {
         const stripe = await loadStripe(publishableKey);
         if (!stripe || isCancelled) return;
 
-        // Stripe Embedded Checkout Page
-        const checkoutInstance = await stripe.createEmbeddedCheckoutPage({
+        const checkoutSdk = stripe.initCheckoutElementsSdk({
           clientSecret,
-          onComplete: () => {
-            fetchInvoice();
+          elementsOptions: {
+            appearance: {
+              theme: "night",
+              variables: {
+                colorPrimary: "#9ee824",
+                colorBackground: "#0b111b",
+                colorText: "#f8fafc",
+                colorDanger: "#fb7185",
+                borderRadius: "10px",
+                fontFamily: "inherit",
+              },
+              rules: {
+                ".Input": { border: "1px solid rgba(255,255,255,.14)", boxShadow: "none" },
+                ".Input:focus": { border: "1px solid #9ee824", boxShadow: "0 0 0 1px #9ee824" },
+                ".Tab": { border: "1px solid rgba(255,255,255,.12)", boxShadow: "none" },
+                ".Tab--selected": { border: "1px solid #9ee824", boxShadow: "none" },
+              },
+            },
           },
         });
-
-        if (isCancelled) {
-          try {
-            checkoutInstance.destroy();
-          } catch (_) {}
-          return;
-        }
-
-        stripeCheckoutRef.current = checkoutInstance;
-        checkoutInstance.mount("#stripe-embedded-checkout");
+        const actionsResult = await checkoutSdk.loadActions();
+        if (isCancelled) return;
+        if (actionsResult.type === "error") throw new Error(actionsResult.error.message);
+        stripeActionsRef.current = actionsResult.actions;
+        const paymentElement = checkoutSdk.createPaymentElement({ layout: "tabs" });
+        stripeCheckoutRef.current = paymentElement;
+        paymentElement.mount("#stripe-embedded-checkout");
         setStripeMounted(true);
       } catch (err: any) {
         console.error("[MOUNT STRIPE EMBEDDED ERROR]", err);
@@ -269,12 +283,33 @@ export default function PagamentoPage() {
       isCancelled = true;
       if (stripeCheckoutRef.current) {
         try {
-          stripeCheckoutRef.current.destroy();
+          stripeCheckoutRef.current.unmount();
         } catch (_) {}
         stripeCheckoutRef.current = null;
       }
+      stripeActionsRef.current = null;
     };
   }, [publishableKey, clientSecret, paymentTab, isPaid, selectedPlan?.key]);
+
+  const handleConfirmPayment = async () => {
+    const actions = stripeActionsRef.current;
+    if (!actions || confirmingPayment) return;
+    try {
+      setConfirmingPayment(true);
+      setStripeError("");
+      const validation = await actions.validateElements();
+      if (validation.type === "error") throw new Error(validation.error.message);
+      const result = await actions.confirm({
+        redirect: "if_required",
+      });
+      if (result.type === "error") throw new Error(result.error.message);
+      await fetchInvoice();
+    } catch (err: any) {
+      setStripeError(err?.message || "Não foi possível confirmar o pagamento.");
+    } finally {
+      setConfirmingPayment(false);
+    }
+  };
 
   const handleSelectPlan = async (planKey: string) => {
     if (!tenant || planKey === selectedPlan?.key || updatingPlan) return;
@@ -869,16 +904,9 @@ export default function PagamentoPage() {
               {/* ============================================================== */}
               {!isPaid && (
                 <div style={{ marginTop: "18px" }}>
-                  <div className="payment-tabs-group">
-                    <button
-                      type="button"
-                      onClick={() => setPaymentTab("card")}
-                      className={`payment-tab-btn ${paymentTab === "card" ? "active" : ""}`}
-                    >
-                      <CreditCard size={16} />
-                      <span>Cartão de Crédito</span>
-                    </button>
-                    {billingCycle === "annual" && <div className="payment-tab-btn active"><QrCode size={16} /><span>PIX no formulário</span></div>}
+                  <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "14px", color: "var(--text-muted)", fontSize: "12px" }}>
+                    {billingCycle === "annual" ? <QrCode size={15} color="var(--primary)" /> : <CreditCard size={15} color="var(--primary)" />}
+                    <span>{billingCycle === "annual" ? "Escolha cartão ou PIX" : "Pagamento seguro com cartão"}</span>
                   </div>
 
                   {/* ABA 1: CARTÃO DE CRÉDITO DIRETO NA TELA */}
@@ -905,7 +933,12 @@ export default function PagamentoPage() {
                           )}
 
                           {/* Container Oficial do Stripe Embedded */}
-                          <div id="stripe-embedded-checkout" style={{ minHeight: "360px" }} />
+                          <div id="stripe-embedded-checkout" style={{ minHeight: stripeMounted ? "150px" : "220px" }} />
+                          <button type="button" onClick={handleConfirmPayment} disabled={!stripeMounted || confirmingPayment} className="checkout-pay-btn" style={{ width: "100%", border: 0, marginTop: "14px", opacity: !stripeMounted || confirmingPayment ? 0.65 : 1, cursor: !stripeMounted || confirmingPayment ? "wait" : "pointer" }}>
+                            {confirmingPayment ? <RefreshCw size={17} className="animate-spin" /> : billingCycle === "annual" ? <Sparkles size={17} /> : <CreditCard size={17} />}
+                            <span>{confirmingPayment ? "Confirmando..." : billingCycle === "annual" ? `Pagar ${displayedTotalFormatted}` : `Assinar por ${displayedTotalFormatted}/mês`}</span>
+                            {!confirmingPayment && <ArrowRight size={16} />}
+                          </button>
                         </div>
                       ) : (
                         /* Preview de Cartão Titanium com Opções Diretas */

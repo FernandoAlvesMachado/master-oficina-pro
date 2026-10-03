@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   );
   const rows = await query<any>(
     `SELECT t.id, t.status, t.expires_at, t.plan, t.max_users, t.enabled_features,
-            t.billing_status, t.billing_grace_until, t.billing_block_reason,
+            t.billing_status, t.billing_cycle, t.billing_grace_until, t.billing_block_reason,
             t.billing_checkout_url, t.billing_checkout_expires_at, t.last_payment_at,
             t.billing_failure_reason, t.billing_attempt_count,
             (SELECT COUNT(*)::int FROM users u WHERE u.tenant_id = t.id AND u.is_active = TRUE) AS active_users
@@ -43,6 +43,9 @@ export async function GET(req: NextRequest) {
 
   const checkoutValid = tenant.billing_checkout_url && (!tenant.billing_checkout_expires_at || new Date(tenant.billing_checkout_expires_at) > new Date());
   const expired = tenant.expires_at && new Date(tenant.expires_at) < new Date();
+  const daysRemaining = tenant.expires_at
+    ? Math.max(0, Math.ceil((new Date(tenant.expires_at).getTime() - Date.now()) / 86400000))
+    : null;
   const accessAllowed = tenant.status !== "BLOCKED" && tenant.status !== "EXPIRED" && !expired;
   return NextResponse.json({
     success: true,
@@ -50,8 +53,11 @@ export async function GET(req: NextRequest) {
     access: { allowed: accessAllowed, status: tenant.status, reason: tenant.billing_block_reason },
     billing: {
       status: tenant.billing_status,
+      cycle: tenant.billing_cycle || "monthly",
       graceUntil: tenant.billing_grace_until,
       lastPaymentAt: tenant.last_payment_at,
+      serviceUntil: tenant.expires_at,
+      daysRemaining,
       checkoutUrl: checkoutValid ? tenant.billing_checkout_url : null,
       checkoutExpiresAt: checkoutValid ? tenant.billing_checkout_expires_at : null,
       failureReason: tenant.billing_failure_reason,

@@ -54,11 +54,29 @@ export async function GET(req: NextRequest) {
     let checkoutError: string | null = null;
     let checkoutUrl = tenant.billing_checkout_url as string | null;
     let clientSecret: string | null = null;
-    const isCheckoutValid = checkoutUrl && tenant.billing_checkout_expires_at && new Date(tenant.billing_checkout_expires_at) > new Date();
+    let isCheckoutValid = Boolean(checkoutUrl && tenant.billing_checkout_expires_at && new Date(tenant.billing_checkout_expires_at) > new Date());
 
     // Se a sessão salva for um client_secret embedded
     if (checkoutUrl && checkoutUrl.startsWith("cs_")) {
       clientSecret = checkoutUrl;
+    }
+
+    // Sessões do checkout incorporado antigo não funcionam com o Payment Element.
+    // Detecta e recria automaticamente no formato visual atual.
+    if (clientSecret && isCheckoutValid && isStripeConfigured()) {
+      try {
+        const sessionId = clientSecret.split("_secret_")[0];
+        const savedSession = await getStripe().checkout.sessions.retrieve(sessionId);
+        if (savedSession.ui_mode !== "elements") {
+          clientSecret = null;
+          checkoutUrl = null;
+          isCheckoutValid = false;
+        }
+      } catch {
+        clientSecret = null;
+        checkoutUrl = null;
+        isCheckoutValid = false;
+      }
     }
 
     // Se o checkout estiver expirado ou ausente e a Stripe estiver configurada, recria a sessão automaticamente
@@ -66,6 +84,13 @@ export async function GET(req: NextRequest) {
       try {
         const stripe = getStripe();
         const priceId = stripePriceForPlan(selectedPlanKey);
+        const billingCycle = tenant.billing_cycle === "annual" ? "annual" : "monthly";
+        const annualAmountCents = Math.round(planInfo.priceCents * 12 * 0.9);
+        const lineItems = billingCycle === "annual"
+          ? [{ price_data: { currency: "brl", unit_amount: annualAmountCents, product_data: { name: `GIRAVO ${planInfo.name} - Plano anual`, description: "12 meses de acesso com 10% de desconto" } }, quantity: 1 }]
+          : [{ price: priceId, quantity: 1 }];
+        const sessionMode = billingCycle === "annual" ? "payment" as const : "subscription" as const;
+        const metadata = { tenant_id: tenant.id, giravo_plan: selectedPlanKey, billing_cycle: billingCycle };
 
         if (priceId) {
           let customerId = tenant.stripe_customer_id;
@@ -84,15 +109,15 @@ export async function GET(req: NextRequest) {
           // Se a chave publicável estiver configurada, gera sessão embutida (embedded_page)
           if (publishableKey && stripeKeysUseSameMode(secretKey, publishableKey)) {
             const session = await stripe.checkout.sessions.create({
-              ui_mode: "embedded_page",
-              mode: "subscription",
-              allowed_payment_method_types: ["card"],
+              ui_mode: "elements",
+              mode: sessionMode,
+              allowed_payment_method_types: billingCycle === "annual" ? ["card", "pix"] : ["card"],
               customer: customerId,
-              line_items: [{ price: priceId, quantity: 1 }],
+              line_items: lineItems,
               return_url: `${returnUrl}?sucesso=1&session_id={CHECKOUT_SESSION_ID}`,
               client_reference_id: tenant.id,
-              subscription_data: { metadata: { tenant_id: tenant.id, giravo_plan: selectedPlanKey } },
-              metadata: { tenant_id: tenant.id, giravo_plan: selectedPlanKey },
+              ...(billingCycle === "monthly" ? { subscription_data: { metadata } } : {}),
+              metadata,
             });
 
             clientSecret = session.client_secret || null;
@@ -106,15 +131,15 @@ export async function GET(req: NextRequest) {
           } else {
             // Modo hosted fallback se ainda não tiver publishable key
             const session = await stripe.checkout.sessions.create({
-              mode: "subscription",
-              allowed_payment_method_types: ["card"],
+              mode: sessionMode,
+              allowed_payment_method_types: billingCycle === "annual" ? ["card", "pix"] : ["card"],
               customer: customerId,
-              line_items: [{ price: priceId, quantity: 1 }],
+              line_items: lineItems,
               success_url: `${returnUrl}?sucesso=1`,
               cancel_url: `${returnUrl}?cancelado=1`,
               client_reference_id: tenant.id,
-              subscription_data: { metadata: { tenant_id: tenant.id, giravo_plan: selectedPlanKey } },
-              metadata: { tenant_id: tenant.id, giravo_plan: selectedPlanKey },
+              ...(billingCycle === "monthly" ? { subscription_data: { metadata } } : {}),
+              metadata,
             });
 
             checkoutUrl = session.url;
@@ -259,7 +284,7 @@ export async function POST(req: NextRequest) {
 
     if (publishableKey) {
       const session = await stripe.checkout.sessions.create({
-        ui_mode: "embedded_page",
+        ui_mode: "elements",
         mode: sessionMode,
         customer: customerId,
         line_items: lineItems,
