@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query, hashPassword, ensureTablesOnce, withTransaction } from "@/lib/db";
 import { verifyRequestAuth } from "@/lib/auth";
 import { cleanText, integerInRange, isRecord, isValidEmail, publicError, TENANT_STATUSES } from "@/lib/validation";
+import { normalizePlan, PLAN_CATALOG } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -26,11 +27,22 @@ export async function GET(req: NextRequest) {
         t.email,
         t.phone,
         t.plan,
+        t.max_users,
         t.status,
         t.trial_until,
         t.expires_at,
         t.enabled_features,
         t.company_settings,
+        t.stripe_customer_id,
+        t.stripe_subscription_id,
+        t.billing_status,
+        t.monthly_amount_cents,
+        t.last_payment_at,
+        t.billing_checkout_url,
+        t.billing_checkout_expires_at,
+        t.billing_grace_until,
+        t.billing_block_reason,
+        t.stripe_last_invoice_id,
         t.created_at,
         COUNT(u.id)::int as users_count,
         MAX(u.last_login_at) as last_login_at
@@ -102,7 +114,7 @@ export async function POST(req: NextRequest) {
     const email = cleanText(rawEmail, 254).toLowerCase();
     const phone = cleanText(rawPhone, 50);
     const password = cleanText(rawPassword, 128);
-    const plan = cleanText(rawPlan, 50).toUpperCase();
+    const plan = normalizePlan(rawPlan) || "PROFISSIONAL";
     const validDays = integerInRange(daysValid, 1, 3650);
 
     if (!name || !ownerName || !isValidEmail(email) || password.length < 8 || !validDays) {
@@ -123,19 +135,12 @@ export async function POST(req: NextRequest) {
     const userId = `usr-${Date.now()}`;
     const passwordHash = hashPassword(password);
     const expiresAt = new Date(Date.now() + validDays * 86400000);
-    const isTrial = plan === "TRIAL" || requestedStatus === "TRIAL";
+    const isTrial = requestedStatus === "TRIAL";
     const tenantStatus = requestedStatus || (isTrial ? "TRIAL" : "ACTIVE");
     const trialUntil = isTrial ? expiresAt.toISOString() : null;
 
-    const defaultFeatures = customFeatures || {
-      ordens_servico: true,
-      checklist_fotos: true,
-      estoque_pecas: true,
-      pdv_balcao: true,
-      financeiro: true,
-      whatsapp_crm: true,
-      relatorios: true,
-    };
+    const planDefinition = PLAN_CATALOG[plan];
+    const defaultFeatures = customFeatures || planDefinition.features;
 
     const initialSettings = {
       name,
@@ -153,8 +158,8 @@ export async function POST(req: NextRequest) {
     await ensureTablesOnce();
     await withTransaction(async (client) => {
       await client.query(
-      `INSERT INTO tenants (id, name, owner_name, email, phone, plan, status, trial_until, expires_at, enabled_features, company_settings)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      `INSERT INTO tenants (id, name, owner_name, email, phone, plan, max_users, status, trial_until, expires_at, enabled_features, company_settings)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         tenantId,
         name,
@@ -162,6 +167,7 @@ export async function POST(req: NextRequest) {
         email.toLowerCase().trim(),
         phone,
         plan,
+        planDefinition.maxUsers,
         tenantStatus,
         trialUntil,
         expiresAt.toISOString(),
@@ -257,6 +263,11 @@ export async function PATCH(req: NextRequest) {
          status = COALESCE($1, status),
          expires_at = COALESCE($2, expires_at),
          enabled_features = COALESCE($3, enabled_features),
+         billing_block_reason = CASE
+           WHEN $1 = 'BLOCKED' THEN 'MANUAL'
+           WHEN $1 = 'ACTIVE' THEN NULL
+           ELSE billing_block_reason
+         END,
          updated_at = NOW()
        WHERE id = $4 RETURNING id`,
       [

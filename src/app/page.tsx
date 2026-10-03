@@ -61,8 +61,13 @@ import {
   BellOff,
   Archive,
   Inbox,
+  LayoutDashboard,
+  CreditCard,
+  ArrowUpRight,
+  CircleDollarSign,
 } from "lucide-react";
 import { GiravoIcon, GiravoLogo, GiravoAppBadge } from "@/components/GiravoBrand";
+import { normalizePlan, PLAN_CATALOG, type PlanKey } from "@/lib/plans";
 
 interface Tenant {
   id: string;
@@ -71,6 +76,7 @@ interface Tenant {
   email: string;
   phone: string;
   plan: string;
+  max_users?: number;
   status: "TRIAL" | "ACTIVE" | "BLOCKED" | "EXPIRED";
   trial_until?: string | null;
   expires_at: string | null;
@@ -79,6 +85,15 @@ interface Tenant {
   last_login_at: string | null;
   enabled_features: Record<string, boolean>;
   company_settings?: Record<string, any>;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  billing_status?: string | null;
+  monthly_amount_cents?: number;
+  last_payment_at?: string | null;
+  billing_checkout_url?: string | null;
+  billing_checkout_expires_at?: string | null;
+  billing_grace_until?: string | null;
+  billing_block_reason?: string | null;
 }
 
 interface Lead {
@@ -128,6 +143,97 @@ function featureDefinitions(flags: Record<string, boolean> = {}) {
   return [...CORE_FEATURES, ...discovered];
 }
 
+interface BillingDashboardData {
+  configured: boolean;
+  livemode?: boolean;
+  message?: string;
+  metrics: { revenueToday: number; revenueMonth: number; mrr: number; activeSubscriptions: number; overdue: number; churnRate: number };
+  series: Array<{ date: string; amount: number; sales: number }>;
+  ranking?: Array<{ id: string; name: string; amount: number; sales: number }>;
+}
+
+const money = (cents: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(cents / 100);
+
+function BillingHome({ data, loading, onRefresh, onOpenCustomers }: {
+  data: BillingDashboardData | null;
+  loading: boolean;
+  onRefresh: () => void;
+  onOpenCustomers: () => void;
+}) {
+  const metrics = data?.metrics || { revenueToday: 0, revenueMonth: 0, mrr: 0, activeSubscriptions: 0, overdue: 0, churnRate: 0 };
+  const series = data?.series?.length ? data.series : Array.from({ length: 7 }, (_, i) => ({ date: `Dia ${i + 1}`, amount: 0, sales: 0 }));
+  const max = Math.max(...series.map((item) => item.amount), 1);
+  const points = series.map((item, index) => `${20 + index * (560 / Math.max(series.length - 1, 1))},${190 - (item.amount / max) * 145}`).join(" ");
+
+  return (
+    <div className="billing-home">
+      <section className="revenue-hero">
+        <div className="hero-orbit hero-orbit-one" />
+        <div className="hero-orbit hero-orbit-two" />
+        <div className="hero-topline">
+          <span><span className="pulse-dot" style={{ background: "#071006" }} /> faturamento de hoje ao vivo</span>
+          <span>GIRAVO BILLING</span>
+        </div>
+        <div className="hero-value">{loading ? "Atualizando..." : money(metrics.revenueToday)}</div>
+        <div className="hero-foot">
+          <span>{series.reduce((sum, item) => sum + item.sales, 0)} pagamentos nos últimos 7 dias</span>
+          <button onClick={onRefresh}><RefreshCw size={13} className={loading ? "animate-spin" : ""} /> Sincronizar</button>
+        </div>
+      </section>
+
+      <div className="billing-grid">
+        <section className="billing-card metric-stack">
+          <div className="card-heading"><span>Indicadores-chave</span><Activity size={15} /></div>
+          <div className="mini-metric-grid">
+            {[
+              { label: "Receita no mês", value: money(metrics.revenueMonth), icon: CircleDollarSign, tone: "lime" },
+              { label: "MRR contratado", value: money(metrics.mrr), icon: TrendingUp, tone: "cyan" },
+              { label: "Assinaturas ativas", value: String(metrics.activeSubscriptions), icon: UserCheck, tone: "emerald" },
+              { label: "Em atraso", value: String(metrics.overdue), icon: AlertTriangle, tone: "amber" },
+              { label: "Churn no mês", value: `${metrics.churnRate.toFixed(1)}%`, icon: ArrowUpRight, tone: "rose" },
+              { label: "Ticket recorrente", value: money(metrics.activeSubscriptions ? metrics.mrr / metrics.activeSubscriptions : 0), icon: WalletIcon, tone: "violet" },
+            ].map(({ label, value, icon: Icon, tone }) => (
+              <div className="mini-metric" key={label}>
+                <span className={`metric-icon ${tone}`}><Icon size={14} /></span>
+                <strong>{value}</strong><small>{label}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="billing-card chart-card">
+          <div className="card-heading"><div><span>Tendência de receita</span><small>Pagamentos confirmados · 7 dias</small></div><span className="live-legend"><i /> Stripe</span></div>
+          <div className="chart-wrap">
+            <svg viewBox="0 0 600 220" role="img" aria-label="Gráfico de receita dos últimos sete dias">
+              <defs><linearGradient id="billingArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#9EE824" stopOpacity=".28"/><stop offset="1" stopColor="#9EE824" stopOpacity="0"/></linearGradient></defs>
+              {[45, 93, 141, 189].map((y) => <line key={y} x1="20" x2="580" y1={y} y2={y} stroke="#263044" strokeDasharray="5 7" />)}
+              <polygon points={`20,190 ${points} 580,190`} fill="url(#billingArea)" />
+              <polyline points={points} fill="none" stroke="#9EE824" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+              {series.map((item, index) => <circle key={item.date} cx={20 + index * (560 / Math.max(series.length - 1, 1))} cy={190 - (item.amount / max) * 145} r="5" fill="#0D111A" stroke="#9EE824" strokeWidth="3" />)}
+            </svg>
+            <div className="chart-labels">{series.map((item) => <span key={item.date}>{new Date(`${item.date}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "")}</span>)}</div>
+          </div>
+        </section>
+
+        <section className="billing-card ranking-card">
+          <div className="card-heading"><span>Clientes que mais faturam</span><button onClick={onOpenCustomers}>Ver contas <ChevronRight size={13} /></button></div>
+          <div className="ranking-list">
+            {(data?.ranking || []).length ? data!.ranking!.map((customer, index) => (
+              <div className="ranking-row" key={customer.id}>
+                <span className="rank-number">{index + 1}</span><span className="rank-avatar">{customer.name.slice(0, 2).toUpperCase()}</span>
+                <div className="rank-copy"><strong>{customer.name}</strong><span>{customer.sales} pagamento(s)</span></div>
+                <strong className="rank-value">{money(customer.amount)}</strong>
+              </div>
+            )) : <div className="empty-ranking"><CreditCard size={28} /><span>Os pagamentos confirmados aparecerão aqui.</span></div>}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+const WalletIcon = DollarSign;
+
 export default function MasterDashboard() {
   // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -136,7 +242,7 @@ export default function MasterDashboard() {
   const [authLoading, setAuthLoading] = useState(false);
 
   // Navigation state (Sidebar)
-  const [activeNav, setActiveNav] = useState<"tenants" | "operational" | "chat" | "leads" | "db">("tenants");
+  const [activeNav, setActiveNav] = useState<"home" | "tenants" | "operational" | "chat" | "leads" | "db">("home");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Data states
@@ -152,6 +258,12 @@ export default function MasterDashboard() {
   const [loading, setLoading] = useState(true);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [dbSource, setDbSource] = useState("");
+  const [billingData, setBillingData] = useState<BillingDashboardData | null>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingModalTenant, setBillingModalTenant] = useState<Tenant | null>(null);
+  const [billingCheckout, setBillingCheckout] = useState<{ url: string; expiresAt?: string } | null>(null);
+  const [billingActionLoading, setBillingActionLoading] = useState(false);
+  const [selectedBillingPlan, setSelectedBillingPlan] = useState<PlanKey>("PROFISSIONAL");
 
   // Filters for Tenants Table
   const [searchTerm, setSearchTerm] = useState("");
@@ -335,7 +447,7 @@ export default function MasterDashboard() {
   const [newEmail, setNewEmail] = useState("");
   const [newPhone, setNewPhone] = useState("");
   const [newPassword, setNewPassword] = useState("123456");
-  const [newPlan, setNewPlan] = useState("PRO");
+  const [newPlan, setNewPlan] = useState<PlanKey>("PROFISSIONAL");
   const [newDays, setNewDays] = useState(30);
 
   // Password reset state
@@ -392,6 +504,7 @@ export default function MasterDashboard() {
       if (data.authenticated) {
         setIsAuthenticated(true);
         fetchTenants();
+        fetchBilling();
         fetchLeads();
         fetchChatMessages();
       } else {
@@ -418,6 +531,7 @@ export default function MasterDashboard() {
       if (data.success) {
         setIsAuthenticated(true);
         fetchTenants();
+        fetchBilling();
         fetchLeads();
         fetchChatMessages();
         showToast("Painel Master autenticado com sucesso!", "success");
@@ -470,6 +584,21 @@ export default function MasterDashboard() {
       showToast("Erro ao carregar oficinas: " + err.message, "error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchBilling = async () => {
+    setBillingLoading(true);
+    try {
+      const res = await fetch("/api/billing");
+      if (res.status === 401) { setIsAuthenticated(false); return; }
+      const data = await res.json();
+      if (data.success) setBillingData(data);
+      else showToast(data.error || "Não foi possível consultar a Stripe.", "error");
+    } catch (error) {
+      console.warn("Erro ao consultar faturamento:", error);
+    } finally {
+      setBillingLoading(false);
     }
   };
 
@@ -838,6 +967,8 @@ export default function MasterDashboard() {
       if (data.success) {
         showToast(`+${days} dias adicionados para "${tenantName}"!`, "success");
         fetchTenants();
+      } else {
+        throw new Error(data.error || "Falha ao atualizar a validade da oficina.");
       }
     } catch (err: any) {
       showToast("Erro ao estender validade: " + err.message, "error");
@@ -926,6 +1057,8 @@ export default function MasterDashboard() {
           nextStatus === "BLOCKED" ? "info" : "success"
         );
         fetchTenants();
+      } else {
+        throw new Error(data.error || `Falha ao ${nextStatus === "BLOCKED" ? "bloquear" : "liberar"} a oficina.`);
       }
     } catch (err: any) {
       showToast("Erro ao alterar status: " + err.message, "error");
@@ -1051,6 +1184,36 @@ export default function MasterDashboard() {
       }
     } catch (err: any) {
       showToast("Erro ao excluir: " + err.message, "error");
+    }
+  };
+
+  const handleStripeAction = async (tenantId: string, action: "checkout" | "portal" | "change_plan") => {
+    setBillingActionLoading(true);
+    try {
+      const res = await fetch("/api/billing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId, action, plan: selectedBillingPlan }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Não foi possível concluir a operação na Stripe.");
+      if (action === "portal") {
+        if (!data.url) throw new Error("A Stripe não retornou o endereço do portal.");
+        window.open(data.url, "_blank", "noopener,noreferrer");
+      } else if (action === "checkout") {
+        if (!data.url) throw new Error("A Stripe não retornou o checkout.");
+        setBillingCheckout({ url: data.url, expiresAt: data.expiresAt });
+        await fetchTenants();
+        showToast("Checkout gerado e vinculado à oficina!", "success");
+      } else {
+        await fetchTenants();
+        showToast(`Alteração para o plano ${PLAN_CATALOG[selectedBillingPlan].name} enviada à Stripe.`, "success");
+      }
+      setActionMenuTenantId(null);
+    } catch (error: any) {
+      showToast(error.message, "error");
+    } finally {
+      setBillingActionLoading(false);
     }
   };
 
@@ -1743,6 +1906,22 @@ export default function MasterDashboard() {
 
         {/* Navigation Links */}
         <nav style={{ flex: 1, padding: "16px 10px", display: "flex", flexDirection: "column", gap: "4px" }}>
+          <button
+            onClick={() => setActiveNav("home")}
+            title="Visão Geral"
+            style={{
+              width: "100%", padding: "11px 14px", justifyContent: sidebarCollapsed ? "center" : "flex-start",
+              background: activeNav === "home" ? "var(--bg-card-subtle)" : "transparent",
+              color: activeNav === "home" ? "var(--primary)" : "var(--text-muted)",
+              borderLeft: activeNav === "home" ? "3px solid var(--primary)" : "3px solid transparent",
+              fontSize: "13px", fontWeight: activeNav === "home" ? 700 : 500,
+            }}
+          >
+            <LayoutDashboard size={18} />
+            {!sidebarCollapsed && <span>Visão Geral</span>}
+            {!sidebarCollapsed && <span style={{ marginLeft: "auto", fontSize: "9px", fontWeight: 900, color: "#071006", background: "var(--primary)", padding: "2px 5px" }}>LIVE</span>}
+          </button>
+
           {/* Tab 1: Clientes & Oficinas */}
           <button
             onClick={() => setActiveNav("tenants")}
@@ -2055,6 +2234,7 @@ export default function MasterDashboard() {
           <div>
             <h1 style={{ fontSize: "20px", fontWeight: 800, color: "#FFF", margin: 0, letterSpacing: "-0.01em" }}>
               {activeNav === "tenants" && "Gestão de Clientes & Oficinas"}
+              {activeNav === "home" && "Visão Geral do Negócio"}
               {activeNav === "operational" && "Espelho Operacional da Oficina (Dashboard do Cliente)"}
               {activeNav === "chat" && "Central de Atendimento & Chat com as Oficinas"}
               {activeNav === "leads" && "Leads & Solicitações de Teste (14 Dias)"}
@@ -2062,6 +2242,7 @@ export default function MasterDashboard() {
             </h1>
             <p style={{ margin: "3px 0 0", color: "var(--text-muted)", fontSize: "12.5px" }}>
               {activeNav === "tenants" && "Controle centralizado de validade, bloqueios e permissões de módulos"}
+              {activeNav === "home" && "Receita, assinaturas e saúde da sua base de clientes em tempo real"}
               {activeNav === "operational" && "Visualize exatamente como o cliente vê o sistema com ordens de serviço, checklist e financeiro"}
               {activeNav === "chat" && "Canal de comunicação direta com os operadores e donos de oficina dentro da plataforma"}
               {activeNav === "leads" && "Oportunidades de novos clientes que pediram degustação pelas páginas de captura"}
@@ -2071,7 +2252,7 @@ export default function MasterDashboard() {
 
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <button
-              onClick={fetchTenants}
+              onClick={() => { fetchTenants(); if (activeNav === "home") fetchBilling(); }}
               style={{
                 padding: "8px 14px",
                 background: "var(--bg-card)",
@@ -2104,6 +2285,16 @@ export default function MasterDashboard() {
             )}
           </div>
         </header>
+
+        {/* ================================================================== */}
+        {activeNav === "home" && (
+          <BillingHome
+            data={billingData}
+            loading={billingLoading}
+            onRefresh={fetchBilling}
+            onOpenCustomers={() => setActiveNav("tenants")}
+          />
+        )}
 
         {/* ================================================================== */}
         {/* ABA 1: CLIENTES & OFICINAS (TABELA COMPLETA COM VISUAL RETO) */}
@@ -2283,9 +2474,9 @@ export default function MasterDashboard() {
                 style={{ background: "var(--bg-card)", minWidth: "140px" }}
               >
                 <option value="TODOS">Todos os Planos</option>
-                <option value="PRO">Plano PRO</option>
-                <option value="ENTERPRISE">Plano Enterprise</option>
-                <option value="TRIAL">Plano Trial</option>
+                <option value="ESSENCIAL">Plano Essencial</option>
+                <option value="PROFISSIONAL">Plano Profissional</option>
+                <option value="PREMIUM">Plano Premium</option>
               </select>
             </div>
 
@@ -2502,7 +2693,7 @@ export default function MasterDashboard() {
                           {/* Operators & Last Access */}
                           <td style={{ padding: "14px 18px" }}>
                             <div style={{ color: "#E2E8F0", fontSize: "12.5px" }}>
-                              {t.users_count || 1} operador(es)
+                              {t.users_count || 1}/{t.max_users || 1} acesso(s) ativo(s)
                             </div>
                             <div style={{ color: "var(--text-dim)", fontSize: "11px", marginTop: "2px" }}>
                               {t.last_login_at
@@ -2692,6 +2883,14 @@ export default function MasterDashboard() {
                                     >
                                       <Clock size={13} color="#FBBF24" />
                                       <span>Modificar Dias Restantes</span>
+                                    </button>
+
+                                    <button
+                                      onClick={() => { setBillingModalTenant(t); setSelectedBillingPlan(normalizePlan(t.plan) || "PROFISSIONAL"); setBillingCheckout(t.billing_checkout_url ? { url: t.billing_checkout_url, expiresAt: t.billing_checkout_expires_at || undefined } : null); setActionMenuTenantId(null); }}
+                                      style={{ padding: "8px 10px", justifyContent: "flex-start", color: "var(--primary)", fontSize: "12px", width: "100%" }}
+                                    >
+                                      <CreditCard size={13} />
+                                      <span>Mensalidade & Cobrança</span>
                                     </button>
 
                                     <button
@@ -4993,9 +5192,131 @@ export default function MasterDashboard() {
                 </div>
               )}
             </div>
+
+            <div className="glass-panel" style={{ padding: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "16px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <CreditCard size={22} color="#A78BFA" />
+                  <div>
+                    <h3 style={{ fontSize: "16px", color: "#FFF", margin: 0 }}>Status da API Stripe</h3>
+                    <p style={{ margin: "2px 0 0", color: "var(--text-dim)", fontSize: "11px" }}>Cobranças, assinaturas e webhooks</p>
+                  </div>
+                </div>
+                <button onClick={() => { fetchDbDiag(); fetchBilling(); }} style={{ padding: "7px 10px", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
+                  <RefreshCw size={13} className={dbDiagLoading ? "animate-spin" : ""} /> Testar
+                </button>
+              </div>
+
+              {dbDiagData?.stripe?.connected ? (
+                <div style={{ padding: "14px", display: "flex", alignItems: "center", gap: "11px", background: "rgba(16,185,129,.1)", border: "1px solid rgba(16,185,129,.32)" }}>
+                  <CheckCircle2 size={22} color="#34D399" />
+                  <div>
+                    <strong style={{ display: "block", color: "#34D399", fontSize: "13px" }}>Stripe conectada e autenticada</strong>
+                    <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>
+                      Ambiente: {dbDiagData.stripe.livemode ? "Produção (Live)" : "Teste"} · Assinaturas e faturas acessíveis
+                    </span>
+                    <span style={{ display: "block", marginTop: "3px", color: dbDiagData.stripe.webhookConfigured ? "#A7F3D0" : "#FBBF24", fontSize: "10.5px" }}>
+                      Webhook: {dbDiagData.stripe.webhookConfigured ? "segredo configurado" : "STRIPE_WEBHOOK_SECRET ausente ou inválido"}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ padding: "14px", display: "flex", alignItems: "center", gap: "11px", background: "rgba(245,158,11,.09)", border: "1px solid rgba(245,158,11,.32)" }}>
+                  <AlertTriangle size={22} color="#FBBF24" />
+                  <div>
+                    <strong style={{ display: "block", color: "#FBBF24", fontSize: "13px" }}>
+                      {dbDiagData?.stripe?.configured ? "Stripe configurada, mas sem conexão" : "Stripe ainda não configurada"}
+                    </strong>
+                    <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>
+                      {dbDiagData?.stripe?.error || "Adicione STRIPE_SECRET_KEY e STRIPE_WEBHOOK_SECRET nas variáveis do servidor."}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </main>
+
+      {billingModalTenant && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.82)", backdropFilter: "blur(7px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 140, padding: "20px" }}>
+          <div className="glass-modal" style={{ width: "100%", maxWidth: "560px", padding: "26px" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "14px", marginBottom: "20px" }}>
+              <div style={{ display: "flex", gap: "11px", alignItems: "center" }}>
+                <div style={{ width: "40px", height: "40px", display: "grid", placeItems: "center", borderRadius: "10px", color: "var(--primary)", background: "rgba(158,232,36,.1)", border: "1px solid rgba(158,232,36,.25)" }}><CreditCard size={21} /></div>
+                <div><h3 style={{ margin: 0, fontSize: "16px" }}>Mensalidade da oficina</h3><p style={{ margin: "2px 0 0", color: "var(--text-muted)", fontSize: "12px" }}>{billingModalTenant.name}</p></div>
+              </div>
+              <button onClick={() => { setBillingModalTenant(null); setBillingCheckout(null); }} style={{ color: "var(--text-dim)", padding: "4px" }}><X size={18} /></button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px" }}>
+              <div style={{ padding: "13px", background: "#090D14", border: "1px solid var(--border-subtle)" }}>
+                <span style={{ display: "block", color: "var(--text-dim)", fontSize: "10px", textTransform: "uppercase", fontWeight: 800 }}>Situação financeira</span>
+                <strong style={{ display: "block", marginTop: "5px", color: ["PAID", "ACTIVE"].includes(billingModalTenant.billing_status || "") ? "#34D399" : billingModalTenant.billing_status === "PAST_DUE" ? "#FBBF24" : "#FFF", fontSize: "13px" }}>
+                  {billingModalTenant.billing_status || "Não configurada"}
+                </strong>
+              </div>
+              <div style={{ padding: "13px", background: "#090D14", border: "1px solid var(--border-subtle)" }}>
+                <span style={{ display: "block", color: "var(--text-dim)", fontSize: "10px", textTransform: "uppercase", fontWeight: 800 }}>Último pagamento</span>
+                <strong style={{ display: "block", marginTop: "5px", color: "#FFF", fontSize: "13px" }}>{billingModalTenant.last_payment_at ? new Date(billingModalTenant.last_payment_at).toLocaleDateString("pt-BR") : "Nenhum registrado"}</strong>
+              </div>
+            </div>
+
+            {billingModalTenant.billing_block_reason && (
+              <div style={{ padding: "10px 12px", marginBottom: "14px", color: "#FCA5A5", background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.25)", fontSize: "11.5px" }}>
+                Bloqueio atual: {billingModalTenant.billing_block_reason === "PAYMENT_OVERDUE" ? "automático por inadimplência" : "manual pelo administrador"}.
+              </div>
+            )}
+
+            <div style={{ marginBottom: "15px" }}>
+              <span style={{ display: "block", marginBottom: "8px", color: "var(--text-muted)", fontSize: "10px", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em" }}>Escolha o plano da assinatura</span>
+              <div className="billing-plan-grid">
+                {(Object.values(PLAN_CATALOG) as Array<(typeof PLAN_CATALOG)[PlanKey]>).map((plan) => {
+                  const selected = selectedBillingPlan === plan.key;
+                  const enabledCount = Object.values(plan.features).filter(Boolean).length;
+                  return (
+                    <button key={plan.key} type="button" onClick={() => { setSelectedBillingPlan(plan.key); setBillingCheckout(null); }} className={`billing-plan-option ${selected ? "selected" : ""}`}>
+                      <span className="plan-tier">{plan.name}</span>
+                      <strong>{money(plan.priceCents)}<small>/mês</small></strong>
+                      <span><Users size={12} /> {plan.maxUsers} {plan.maxUsers === 1 ? "acesso" : "acessos"}</span>
+                      <span><Layers size={12} /> {enabledCount} módulos</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p style={{ margin: "7px 0 0", color: "var(--text-dim)", fontSize: "10px" }}>{PLAN_CATALOG[selectedBillingPlan].description}</p>
+            </div>
+
+            <div style={{ padding: "15px", background: "rgba(158,232,36,.055)", border: "1px solid rgba(158,232,36,.2)", marginBottom: "15px" }}>
+              <strong style={{ display: "block", color: "#FFF", fontSize: "12.5px", marginBottom: "4px" }}>Checkout para o cliente</strong>
+              <p style={{ margin: "0 0 12px", color: "var(--text-muted)", fontSize: "11px" }}>O link fica salvo na conta da oficina e pode ser exibido pelo sistema do cliente quando a mensalidade estiver pendente.</p>
+              {billingCheckout?.url ? (
+                <div>
+                  <div style={{ display: "flex", gap: "7px" }}>
+                    <input readOnly value={billingCheckout.url} style={{ minWidth: 0, flex: 1, fontSize: "10.5px" }} />
+                    <button onClick={() => { navigator.clipboard.writeText(billingCheckout.url); showToast("Link de cobrança copiado!", "success"); }} style={{ padding: "8px 11px", background: "var(--primary)", color: "#071006" }}><Copy size={13} /> Copiar</button>
+                  </div>
+                  {billingCheckout.expiresAt && <span style={{ display: "block", marginTop: "6px", color: "var(--text-dim)", fontSize: "10px" }}>Válido até {new Date(billingCheckout.expiresAt).toLocaleString("pt-BR")}</span>}
+                </div>
+              ) : (
+                <button disabled={billingActionLoading || (Boolean(billingModalTenant.stripe_subscription_id) && normalizePlan(billingModalTenant.plan) === selectedBillingPlan)} onClick={() => handleStripeAction(billingModalTenant.id, billingModalTenant.stripe_subscription_id ? "change_plan" : "checkout")} style={{ width: "100%", padding: "10px", background: "var(--primary)", color: "#071006", fontWeight: 850 }}>
+                  {billingActionLoading ? <RefreshCw size={14} className="animate-spin" /> : <CircleDollarSign size={15} />}
+                  {billingModalTenant.stripe_subscription_id ? `Alterar para ${PLAN_CATALOG[selectedBillingPlan].name}` : `Gerar checkout · ${PLAN_CATALOG[selectedBillingPlan].name}`}
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: billingModalTenant.phone && billingCheckout?.url ? "1fr 1fr" : "1fr", gap: "9px" }}>
+              {billingModalTenant.phone && billingCheckout?.url && (
+                <a href={`https://wa.me/55${billingModalTenant.phone.replace(/\D/g, "")}?text=${encodeURIComponent(`Olá! A mensalidade do sistema GIRAVO da oficina ${billingModalTenant.name} está disponível para pagamento. Acesse o checkout seguro: ${billingCheckout.url}`)}`} target="_blank" rel="noreferrer" style={{ padding: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: "7px", color: "#071006", background: "#25D366", textDecoration: "none", fontSize: "12px", fontWeight: 850, borderRadius: "8px" }}><MessageCircle size={15} /> Enviar no WhatsApp</a>
+              )}
+              {billingModalTenant.stripe_customer_id && (
+                <button disabled={billingActionLoading} onClick={() => handleStripeAction(billingModalTenant.id, "portal")} style={{ padding: "10px", color: "#FFF", background: "var(--bg-card-subtle)", border: "1px solid var(--border-subtle)" }}><ExternalLink size={14} /> Abrir portal Stripe</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ==================================================================== */}
       {/* MODAL: MODIFICAR DIAS RESTANTES (ITEM REQUISITADO COM BORDAS RETAS) */}
@@ -5261,10 +5582,10 @@ export default function MasterDashboard() {
                 </div>
                 <div>
                   <label style={{ display: "block", fontSize: "11.5px", color: "var(--text-muted)", marginBottom: "3px" }}>Plano</label>
-                  <select value={newPlan} onChange={(e) => setNewPlan(e.target.value)} style={{ width: "100%" }}>
-                    <option value="PRO">PRO</option>
-                    <option value="ENTERPRISE">Enterprise</option>
-                    <option value="TRIAL">Trial</option>
+                  <select value={newPlan} onChange={(e) => setNewPlan(e.target.value as PlanKey)} style={{ width: "100%" }}>
+                    <option value="ESSENCIAL">Essencial · 1 acesso</option>
+                    <option value="PROFISSIONAL">Profissional · 3 acessos</option>
+                    <option value="PREMIUM">Premium · 10 acessos</option>
                   </select>
                 </div>
               </div>

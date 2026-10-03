@@ -152,13 +152,73 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
         email VARCHAR(255) UNIQUE NOT NULL,
         phone VARCHAR(50),
         plan VARCHAR(50) DEFAULT 'PRO',
+        max_users INTEGER NOT NULL DEFAULT 1,
+        pending_plan VARCHAR(50),
         status VARCHAR(50) DEFAULT 'ACTIVE',
         trial_until TIMESTAMPTZ,
         expires_at TIMESTAMPTZ,
         enabled_features JSONB DEFAULT '{}'::jsonb,
         company_settings JSONB DEFAULT '{}'::jsonb,
+        stripe_customer_id VARCHAR(255),
+        stripe_subscription_id VARCHAR(255),
+        billing_status VARCHAR(50) DEFAULT 'UNCONFIGURED',
+        monthly_amount_cents INTEGER DEFAULT 0,
+        last_payment_at TIMESTAMPTZ,
+        billing_checkout_url TEXT,
+        billing_checkout_expires_at TIMESTAMPTZ,
+        billing_grace_until TIMESTAMPTZ,
+        billing_block_reason VARCHAR(50),
+        stripe_last_invoice_id VARCHAR(255),
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE tenants
+        ADD COLUMN IF NOT EXISTS max_users INTEGER NOT NULL DEFAULT 1,
+        ADD COLUMN IF NOT EXISTS pending_plan VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS stripe_subscription_id VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS billing_status VARCHAR(50) DEFAULT 'UNCONFIGURED',
+        ADD COLUMN IF NOT EXISTS monthly_amount_cents INTEGER DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS last_payment_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS billing_checkout_url TEXT,
+        ADD COLUMN IF NOT EXISTS billing_checkout_expires_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS billing_grace_until TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS billing_block_reason VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS stripe_last_invoice_id VARCHAR(255);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_stripe_customer
+        ON tenants(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
+      UPDATE tenants SET plan = CASE
+        WHEN plan = 'PRO' THEN 'PROFISSIONAL'
+        WHEN plan = 'ENTERPRISE' THEN 'PREMIUM'
+        WHEN plan IN ('BASIC', 'TRIAL') THEN 'ESSENCIAL'
+        ELSE plan END
+      WHERE plan IN ('PRO', 'ENTERPRISE', 'BASIC', 'TRIAL');
+      UPDATE tenants SET max_users = CASE
+        WHEN plan IN ('PREMIUM') THEN 10
+        WHEN plan IN ('PRO', 'PROFISSIONAL') THEN 3
+        ELSE 1 END
+      WHERE max_users IS NULL OR (max_users = 1 AND plan IN ('PRO', 'PROFISSIONAL', 'PREMIUM'));
+    `);
+
+    // Eventos financeiros persistidos para auditoria e relatórios históricos.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stripe_payments (
+        id VARCHAR(255) PRIMARY KEY,
+        tenant_id VARCHAR(64) REFERENCES tenants(id) ON DELETE SET NULL,
+        stripe_customer_id VARCHAR(255),
+        stripe_invoice_id VARCHAR(255) UNIQUE,
+        amount_cents INTEGER NOT NULL DEFAULT 0,
+        currency VARCHAR(10) NOT NULL DEFAULT 'brl',
+        status VARCHAR(50) NOT NULL,
+        paid_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_stripe_payments_tenant_paid
+        ON stripe_payments(tenant_id, paid_at DESC);
+      CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+        id VARCHAR(255) PRIMARY KEY,
+        event_type VARCHAR(100) NOT NULL,
+        processed_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
 
@@ -177,6 +237,26 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users(tenant_id);
+
+      CREATE OR REPLACE FUNCTION enforce_tenant_user_limit()
+      RETURNS TRIGGER AS $$
+      DECLARE allowed_users INTEGER; active_users INTEGER;
+      BEGIN
+        IF NEW.is_active IS NOT TRUE OR NEW.tenant_id IS NULL THEN RETURN NEW; END IF;
+        SELECT max_users INTO allowed_users FROM tenants WHERE id = NEW.tenant_id;
+        SELECT COUNT(*) INTO active_users FROM users
+          WHERE tenant_id = NEW.tenant_id AND is_active = TRUE AND id <> NEW.id;
+        IF active_users >= COALESCE(allowed_users, 1) THEN
+          RAISE EXCEPTION 'LIMITE_DE_USUARIOS: o plano permite no máximo % acesso(s) ativo(s).', COALESCE(allowed_users, 1)
+            USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_enforce_tenant_user_limit ON users;
+      CREATE TRIGGER trg_enforce_tenant_user_limit
+        BEFORE INSERT OR UPDATE OF tenant_id, is_active ON users
+        FOR EACH ROW EXECUTE FUNCTION enforce_tenant_user_limit();
     `);
 
     // 3. Tabela leads
@@ -317,7 +397,7 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
     return {
       success: true,
       message: "Todas as tabelas do sistema GIRAVO estão ativas e sincronizadas no PostgreSQL!",
-      tables: ["tenants", "users", "leads", "tenant_store", "vehicle_checklists", "chat_messages", "chat_threads"],
+      tables: ["tenants", "users", "leads", "tenant_store", "vehicle_checklists", "chat_messages", "chat_threads", "stripe_payments", "stripe_webhook_events"],
     };
   } finally {
     client.release();

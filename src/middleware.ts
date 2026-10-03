@@ -26,7 +26,20 @@ export async function middleware(req: NextRequest) {
   // Bloqueia CSRF em operações que alteram dados. Chamadas internas sem Origin (server-to-server) continuam válidas.
   if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method)) {
     const origin = req.headers.get("origin");
-    if (origin && origin !== req.nextUrl.origin) {
+    const requestHosts = new Set([
+      req.nextUrl.host,
+      req.headers.get("host") || "",
+      (req.headers.get("x-forwarded-host") || "").split(",")[0].trim(),
+    ].filter(Boolean));
+    let originAllowed = true;
+    if (origin) {
+      try {
+        originAllowed = requestHosts.has(new URL(origin).host);
+      } catch {
+        originAllowed = false;
+      }
+    }
+    if (!originAllowed) {
       return applySecurityHeaders(
         NextResponse.json({ success: false, error: "Origem da requisição não autorizada." }, { status: 403 })
       );
@@ -37,6 +50,8 @@ export async function middleware(req: NextRequest) {
   if (
     (pathname === "/api/auth" && req.method === "POST") ||
     (pathname === "/api/leads" && req.method === "POST") ||
+    (pathname === "/api/stripe/webhook" && req.method === "POST") ||
+    (pathname === "/api/billing/client" && req.method === "GET") ||
     req.method === "OPTIONS"
   ) {
     return applySecurityHeaders(NextResponse.next());
