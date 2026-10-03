@@ -1,0 +1,50 @@
+"use client";
+
+import React, { useEffect, useMemo, useState } from "react";
+import { Building2, Check, ChevronDown, KeyRound, Plus, RefreshCw, Search, ShieldCheck, UserCheck, Users, X } from "lucide-react";
+
+const FEATURES: Record<string, string> = {
+  ordens_servico: "Ordens de serviço", checklist_fotos: "Checklist e fotos", estoque_pecas: "Estoque e peças",
+  pdv_balcao: "PDV e balcão", financeiro: "Financeiro", whatsapp_crm: "WhatsApp CRM", relatorios: "Relatórios",
+};
+const ROLES = ["ADMIN", "GERENTE", "ATENDENTE", "MECANICO", "FINANCEIRO"];
+type AccessUser = { id:string; name:string; email:string; phone?:string; role:string; jobTitle?:string; permissions:Record<string,boolean>; isActive:boolean; lastLoginAt?:string|null };
+type Workshop = { id:string; name:string; plan:string; status:string; maxUsers:number; enabledFeatures:Record<string,boolean>; users:AccessUser[] };
+
+export default function AccessControlPanel() {
+  const [workshops,setWorkshops]=useState<Workshop[]>([]); const [loading,setLoading]=useState(true); const [search,setSearch]=useState("");
+  const [open,setOpen]=useState<string|null>(null); const [creating,setCreating]=useState<string|null>(null); const [busy,setBusy]=useState("");
+  const [form,setForm]=useState({name:"",email:"",password:"",phone:"",role:"ATENDENTE",jobTitle:"",permissions:{} as Record<string,boolean>});
+  const load=async()=>{setLoading(true);try{const r=await fetch("/api/users",{cache:"no-store"});const d=await r.json();if(!r.ok)throw new Error(d.error);setWorkshops(d.workshops||[])}catch(e:any){alert(e.message||"Falha ao carregar usuários") }finally{setLoading(false)}};
+  useEffect(()=>{load()},[]);
+  const filtered=useMemo(()=>workshops.filter(w=>`${w.name} ${w.plan} ${w.users.map(u=>`${u.name} ${u.email}`).join(" ")}`.toLowerCase().includes(search.toLowerCase())),[workshops,search]);
+  const saveUser=async(w:Workshop)=>{setBusy("new");try{const r=await fetch("/api/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...form,tenantId:w.id})});const d=await r.json();if(!r.ok)throw new Error(d.error);setCreating(null);setForm({name:"",email:"",password:"",phone:"",role:"ATENDENTE",jobTitle:"",permissions:{}});await load()}catch(e:any){alert(e.message)}finally{setBusy("")}};
+  const update=async(w:Workshop,u:AccessUser,changes:Partial<AccessUser>)=>{setBusy(u.id);try{const next={...u,...changes};const r=await fetch("/api/users",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({userId:u.id,name:next.name,phone:next.phone,role:next.role,jobTitle:next.jobTitle,permissions:next.permissions,isActive:next.isActive})});const d=await r.json();if(!r.ok)throw new Error(d.error);setWorkshops(list=>list.map(item=>item.id===w.id?{...item,users:item.users.map(x=>x.id===u.id?next:x)}:item))}catch(e:any){alert(e.message)}finally{setBusy("")}};
+  const box:React.CSSProperties={background:"var(--bg-card)",border:"1px solid var(--border-subtle)",borderRadius:14};
+  return <div style={{display:"flex",flexDirection:"column",gap:16}}>
+    <div style={{...box,padding:16,display:"flex",alignItems:"center",gap:12}}><Search size={17} color="var(--text-dim)"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar oficina, usuário ou e-mail..." style={{flex:1,background:"transparent",border:0,outline:0,color:"#fff",fontSize:13}}/><button onClick={load} className="icon-btn"><RefreshCw size={16} className={loading?"animate-spin":""}/></button></div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10}}>
+      {[{l:"Oficinas",v:workshops.length},{l:"Acessos ativos",v:workshops.reduce((s,w)=>s+w.users.filter(u=>u.isActive).length,0)},{l:"Capacidade contratada",v:workshops.reduce((s,w)=>s+w.maxUsers,0)}].map(x=><div key={x.l} style={{...box,padding:"16px 18px"}}><div style={{fontSize:11,color:"var(--text-dim)",textTransform:"uppercase",fontWeight:800}}>{x.l}</div><div style={{fontSize:25,fontWeight:900,color:"#fff",marginTop:4}}>{x.v}</div></div>)}
+    </div>
+    {filtered.map(w=>{const active=w.users.filter(u=>u.isActive).length;const expanded=open===w.id;return <section key={w.id} style={{...box,overflow:"hidden"}}>
+      <button onClick={()=>setOpen(expanded?null:w.id)} style={{width:"100%",padding:18,display:"flex",alignItems:"center",gap:13,background:"transparent",border:0,color:"#fff",cursor:"pointer",textAlign:"left"}}>
+        <span style={{width:40,height:40,borderRadius:10,display:"grid",placeItems:"center",background:"rgba(158,232,36,.1)",color:"var(--primary)"}}><Building2 size={20}/></span>
+        <span style={{flex:1}}><strong style={{display:"block",fontSize:14}}>{w.name}</strong><small style={{color:"var(--text-dim)"}}>Plano {w.plan} · {active} de {w.maxUsers} acessos ativos</small></span>
+        <span style={{fontSize:11,fontWeight:800,color:active>=w.maxUsers?"#fbbf24":"#34d399"}}>{Math.max(0,w.maxUsers-active)} VAGA(S)</span><ChevronDown size={18} style={{transform:expanded?"rotate(180deg)":"none"}}/>
+      </button>
+      {expanded&&<div style={{borderTop:"1px solid var(--border-subtle)",padding:16,background:"rgba(3,7,12,.25)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><div style={{display:"flex",gap:8,alignItems:"center",color:"var(--text-muted)",fontSize:12}}><Users size={15}/><span>Equipe e permissões individuais</span></div><button onClick={()=>setCreating(creating===w.id?null:w.id)} disabled={active>=w.maxUsers} className="checkout-pay-btn" style={{border:0,padding:"9px 12px",fontSize:11,opacity:(active>=w.maxUsers ? .55 : 1)}}><Plus size={14}/>Novo acesso</button></div>
+        {creating===w.id&&<div style={{...box,padding:14,marginBottom:12}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
+          {[["name","Nome"],["email","E-mail"],["password","Senha inicial"],["phone","Telefone"],["jobTitle","Cargo"]].map(([k,p])=><input key={k} type={k==="password"?"password":"text"} value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})} placeholder={p} style={{padding:"10px 11px",borderRadius:8,border:"1px solid var(--border-subtle)",background:"#080d15",color:"#fff"}}/>)}
+          <select value={form.role} onChange={e=>setForm({...form,role:e.target.value})} style={{padding:10,borderRadius:8,background:"#080d15",color:"#fff",border:"1px solid var(--border-subtle)"}}>{ROLES.map(r=><option key={r}>{r}</option>)}</select>
+        </div><div style={{display:"flex",flexWrap:"wrap",gap:7,marginTop:10}}>{Object.entries(w.enabledFeatures).filter(([,v])=>v).map(([k])=><button key={k} onClick={()=>setForm({...form,permissions:{...form.permissions,[k]:!form.permissions[k]}})} style={{padding:"6px 9px",borderRadius:7,border:`1px solid ${form.permissions[k]?"var(--primary)":"var(--border-subtle)"}`,background:form.permissions[k]?"rgba(158,232,36,.1)":"transparent",color:form.permissions[k]?"var(--primary)":"var(--text-muted)",fontSize:10,cursor:"pointer"}}>{form.permissions[k]&&<Check size={10}/>} {FEATURES[k]||k}</button>)}</div><div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:12}}><button onClick={()=>setCreating(null)} className="icon-btn"><X size={15}/></button><button onClick={()=>saveUser(w)} disabled={busy==="new"} className="checkout-pay-btn" style={{border:0,padding:"9px 14px"}}><KeyRound size={14}/>{busy==="new"?"Criando...":"Criar login"}</button></div></div>}
+        <div style={{display:"grid",gap:9}}>{w.users.map(u=><article key={u.id} style={{...box,padding:14,opacity:u.isActive?1:.58}}>
+          <div style={{display:"flex",alignItems:"center",gap:11,flexWrap:"wrap"}}><span style={{width:34,height:34,borderRadius:"50%",display:"grid",placeItems:"center",background:u.role==="ADMIN"?"rgba(158,232,36,.14)":"rgba(56,189,248,.12)",color:u.role==="ADMIN"?"var(--primary)":"#38bdf8"}}><UserCheck size={17}/></span><span style={{minWidth:170,flex:1}}><strong style={{display:"block",fontSize:13}}>{u.name}</strong><small style={{color:"var(--text-dim)"}}>{u.email} · {u.jobTitle||u.role}</small></span><select value={u.role} disabled={busy===u.id} onChange={e=>update(w,u,{role:e.target.value})} style={{background:"#080d15",border:"1px solid var(--border-subtle)",color:"#fff",borderRadius:7,padding:"7px 9px",fontSize:10}}>{ROLES.map(r=><option key={r}>{r}</option>)}</select><button onClick={()=>update(w,u,{isActive:!u.isActive})} disabled={busy===u.id} style={{padding:"7px 10px",borderRadius:7,border:`1px solid ${u.isActive?"rgba(52,211,153,.3)":"rgba(251,191,36,.3)"}`,background:"transparent",color:u.isActive?"#34d399":"#fbbf24",fontSize:10,fontWeight:800,cursor:"pointer"}}>{u.isActive?"ATIVO":"INATIVO"}</button></div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:11,paddingTop:10,borderTop:"1px solid var(--border-subtle)"}}>{Object.entries(w.enabledFeatures).filter(([,v])=>v).map(([k])=>{const yes=u.role==="ADMIN"||u.permissions[k];return <button key={k} disabled={u.role==="ADMIN"||busy===u.id} onClick={()=>update(w,u,{permissions:{...u.permissions,[k]:!u.permissions[k]}})} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"5px 8px",borderRadius:6,border:`1px solid ${yes?"rgba(158,232,36,.28)":"var(--border-subtle)"}`,background:yes?"rgba(158,232,36,.08)":"transparent",color:yes?"var(--primary)":"var(--text-dim)",fontSize:9.5,cursor:u.role==="ADMIN"?"default":"pointer"}}>{yes?<ShieldCheck size={11}/>:<X size={10}/>} {FEATURES[k]||k}</button>})}</div>
+          <div style={{marginTop:8,fontSize:9.5,color:"var(--text-dim)"}}>Último acesso: {u.lastLoginAt?new Date(u.lastLoginAt).toLocaleString("pt-BR"):"Nunca entrou"}</div>
+        </article>)}</div>
+      </div>}
+    </section>})}
+    {!loading&&!filtered.length&&<div style={{...box,padding:40,textAlign:"center",color:"var(--text-dim)"}}><Users size={30} style={{margin:"0 auto 10px"}}/>Nenhuma oficina ou usuário encontrado.</div>}
+  </div>;
+}

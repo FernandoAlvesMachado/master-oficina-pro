@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   }
 
   const tenantId = req.nextUrl.searchParams.get("tenantId")?.trim();
+  const userId = req.nextUrl.searchParams.get("userId")?.trim();
   if (!tenantId) return NextResponse.json({ success: false, error: "tenantId é obrigatório." }, { status: 400 });
 
   await ensureTablesOnce();
@@ -47,10 +48,32 @@ export async function GET(req: NextRequest) {
     ? Math.max(0, Math.ceil((new Date(tenant.expires_at).getTime() - Date.now()) / 86400000))
     : null;
   const accessAllowed = tenant.status !== "BLOCKED" && tenant.status !== "EXPIRED" && !expired;
+  const userRows = userId ? await query<any>(
+    `SELECT id, name, email, role, job_title, permissions, is_active, last_login_at
+     FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+    [userId, tenantId]
+  ) : [];
+  const accountUser = userRows[0] || null;
+  const effectivePermissions = accountUser
+    ? accountUser.role === "ADMIN"
+      ? tenant.enabled_features || {}
+      : Object.fromEntries(Object.entries(accountUser.permissions || {}).filter(([key, allowed]) => allowed === true && tenant.enabled_features?.[key] === true))
+    : null;
   return NextResponse.json({
     success: true,
     tenantId: tenant.id,
     access: { allowed: accessAllowed, status: tenant.status, reason: tenant.billing_block_reason },
+    userAccess: accountUser ? {
+      id: accountUser.id,
+      name: accountUser.name,
+      email: accountUser.email,
+      role: accountUser.role,
+      jobTitle: accountUser.job_title,
+      active: accountUser.is_active,
+      allowed: accessAllowed && accountUser.is_active,
+      permissions: effectivePermissions,
+      lastLoginAt: accountUser.last_login_at,
+    } : null,
     billing: {
       status: tenant.billing_status,
       cycle: tenant.billing_cycle || "monthly",

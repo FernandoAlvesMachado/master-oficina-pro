@@ -246,11 +246,17 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
         password_hash TEXT NOT NULL,
         phone VARCHAR(50),
         role VARCHAR(50) DEFAULT 'ADMIN',
+        job_title VARCHAR(100),
+        permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
         is_active BOOLEAN DEFAULT TRUE,
         last_login_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users(tenant_id);
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS job_title VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '{}'::jsonb;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_email_unique ON users(tenant_id, LOWER(email));
 
       CREATE OR REPLACE FUNCTION enforce_tenant_user_limit()
       RETURNS TRIGGER AS $$

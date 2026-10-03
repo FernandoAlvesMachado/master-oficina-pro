@@ -70,6 +70,7 @@ import {
   MoreVertical,
 } from "lucide-react";
 import { GiravoIcon, GiravoLogo, GiravoAppBadge } from "@/components/GiravoBrand";
+import AccessControlPanel from "@/components/AccessControlPanel";
 import { normalizePlan, PLAN_CATALOG, type PlanKey } from "@/lib/plans";
 
 interface Tenant {
@@ -247,7 +248,7 @@ export default function MasterDashboard() {
   const [authLoading, setAuthLoading] = useState(false);
 
   // Navigation state (Sidebar)
-  const [activeNav, setActiveNav] = useState<"home" | "tenants" | "operational" | "chat" | "leads" | "db">("home");
+  const [activeNav, setActiveNav] = useState<"home" | "tenants" | "access" | "operational" | "chat" | "leads" | "db">("home");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Data states
@@ -1970,6 +1971,22 @@ export default function MasterDashboard() {
             )}
           </button>
 
+          <button
+            onClick={() => setActiveNav("access")}
+            title="Usuários & Acessos"
+            style={{
+              width: "100%", padding: "11px 14px", borderRadius: "var(--radius-sm)",
+              justifyContent: sidebarCollapsed ? "center" : "flex-start",
+              background: activeNav === "access" ? "var(--bg-card-subtle)" : "transparent",
+              color: activeNav === "access" ? "var(--primary)" : "var(--text-muted)",
+              borderLeft: activeNav === "access" ? "3px solid var(--primary)" : "3px solid transparent",
+              fontSize: "13px", fontWeight: activeNav === "access" ? 700 : 500,
+            }}
+          >
+            <KeyRound size={18} />
+            {!sidebarCollapsed && <span>Usuários & Acessos</span>}
+          </button>
+
           {/* Tab 2: Visão Operacional (Espelho do Cliente) */}
           <button
             onClick={() => setActiveNav("operational")}
@@ -2273,6 +2290,7 @@ export default function MasterDashboard() {
               <div style={{ fontSize: "10px", color: "var(--text-dim)", fontWeight: 600 }}>
                 {activeNav === "home" && "Visão Geral"}
                 {activeNav === "tenants" && "Oficinas & Clientes"}
+                {activeNav === "access" && "Usuários & Acessos"}
                 {activeNav === "operational" && "Espelho Operacional"}
                 {activeNav === "chat" && "Central de Atendimento"}
                 {activeNav === "leads" && "Leads & Testes"}
@@ -2343,6 +2361,7 @@ export default function MasterDashboard() {
           <div>
             <h1 style={{ fontSize: "20px", fontWeight: 800, color: "#FFF", margin: 0, letterSpacing: "-0.01em" }}>
               {activeNav === "tenants" && "Gestão de Clientes & Oficinas"}
+              {activeNav === "access" && "Controle de Usuários & Acessos"}
               {activeNav === "home" && "Visão Geral do Negócio"}
               {activeNav === "operational" && "Espelho Operacional da Oficina (Dashboard do Cliente)"}
               {activeNav === "chat" && "Central de Atendimento & Chat com as Oficinas"}
@@ -2351,6 +2370,7 @@ export default function MasterDashboard() {
             </h1>
             <p style={{ margin: "3px 0 0", color: "var(--text-muted)", fontSize: "12.5px" }}>
               {activeNav === "tenants" && "Controle centralizado de validade, bloqueios e permissões de módulos"}
+              {activeNav === "access" && "Acompanhe limites do plano, funções e recursos disponíveis para cada usuário"}
               {activeNav === "home" && "Receita, assinaturas e saúde da sua base de clientes em tempo real"}
               {activeNav === "operational" && "Visualize exatamente como o cliente vê o sistema com ordens de serviço, checklist e financeiro"}
               {activeNav === "chat" && "Canal de comunicação direta com os operadores e donos de oficina dentro da plataforma"}
@@ -2404,6 +2424,8 @@ export default function MasterDashboard() {
             onOpenCustomers={() => setActiveNav("tenants")}
           />
         )}
+
+        {activeNav === "access" && <AccessControlPanel />}
 
         {/* ================================================================== */}
         {/* ABA 1: CLIENTES & OFICINAS (TABELA COMPLETA COM VISUAL RETO) */}
