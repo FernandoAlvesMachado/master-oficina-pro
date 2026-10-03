@@ -151,7 +151,7 @@ export async function POST(req: NextRequest) {
         timestamp,
         read: false,
         type: "BILLING_CHECKOUT",
-        actionUrl: tenant.billing_checkout_url,
+        actionUrl: `${req.nextUrl.origin}/pagamento/${tenant.id}`,
         actionLabel: "Assinar plano",
         billingPlan: selectedPlan,
         amountCents: plan.priceCents,
@@ -243,9 +243,11 @@ export async function POST(req: NextRequest) {
         billing_status = 'CHECKOUT_PENDING', pending_plan = $3, updated_at = NOW() WHERE id = $4`,
       [session.url, new Date(session.expires_at * 1000).toISOString(), selectedPlan, tenant.id]
     );
+    const customCheckoutUrl = `${req.nextUrl.origin}/pagamento/${tenant.id}`;
     return NextResponse.json({
       success: true,
-      url: session.url,
+      url: customCheckoutUrl,
+      stripeUrl: session.url,
       checkoutSessionId: session.id,
       expiresAt: new Date(session.expires_at * 1000).toISOString(),
       plan: selectedPlan,

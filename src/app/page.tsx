@@ -2995,7 +2995,13 @@ export default function MasterDashboard() {
                                     </button>
 
                                     <button
-                                      onClick={() => { setBillingModalTenant(t); setSelectedBillingPlan(normalizePlan(t.plan) || "PROFISSIONAL"); setBillingCheckout(t.billing_checkout_url ? { url: t.billing_checkout_url, expiresAt: t.billing_checkout_expires_at || undefined } : null); setActionMenuTenantId(null); }}
+                                      onClick={() => {
+                                        setBillingModalTenant(t);
+                                        setSelectedBillingPlan(normalizePlan(t.plan) || "PROFISSIONAL");
+                                        const customPayUrl = typeof window !== "undefined" ? `${window.location.origin}/pagamento/${t.id}` : "";
+                                        setBillingCheckout({ url: customPayUrl, expiresAt: t.billing_checkout_expires_at || undefined });
+                                        setActionMenuTenantId(null);
+                                      }}
                                       style={{ padding: "8px 10px", justifyContent: "flex-start", color: "var(--primary)", fontSize: "12px", width: "100%" }}
                                     >
                                       <CreditCard size={13} />
@@ -5918,21 +5924,29 @@ export default function MasterDashboard() {
               <p style={{ margin: "7px 0 0", color: "var(--text-dim)", fontSize: "10px" }}>{PLAN_CATALOG[selectedBillingPlan].description}</p>
             </div>
 
-            <div style={{ padding: "15px", background: "rgba(158,232,36,.055)", border: "1px solid rgba(158,232,36,.2)", marginBottom: "15px" }}>
-              <strong style={{ display: "block", color: "#FFF", fontSize: "12.5px", marginBottom: "4px" }}>Checkout para o cliente</strong>
-              <p style={{ margin: "0 0 12px", color: "var(--text-muted)", fontSize: "11px" }}>O link fica salvo na conta da oficina e pode ser exibido pelo sistema do cliente quando a mensalidade estiver pendente.</p>
+            <div style={{ padding: "16px", background: "rgba(158,232,36,.06)", border: "1px solid rgba(158,232,36,.25)", borderRadius: "10px", marginBottom: "15px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                <strong style={{ color: "#FFF", fontSize: "13px" }}>Checkout Personalizado GIRAVO</strong>
+                <span style={{ fontSize: "9.5px", fontWeight: 850, color: "var(--primary)", background: "rgba(158, 232, 36, 0.15)", border: "1px solid rgba(158, 232, 36, 0.3)", padding: "2px 7px", borderRadius: "4px" }}>
+                  IDENTIDADE VISUAL DA PLATAFORMA
+                </span>
+              </div>
+              <p style={{ margin: "0 0 12px", color: "var(--text-muted)", fontSize: "11px" }}>
+                Página de pagamento exclusiva com os dados da oficina, resumo dos benefícios do plano e processamento seguro via Stripe.
+              </p>
               {billingCheckout?.url ? (
                 <div>
                   <div style={{ display: "flex", gap: "7px" }}>
-                    <input readOnly value={billingCheckout.url} style={{ minWidth: 0, flex: 1, fontSize: "10.5px" }} />
-                    <button onClick={() => { navigator.clipboard.writeText(billingCheckout.url); showToast("Link de cobrança copiado!", "success"); }} style={{ padding: "8px 11px", background: "var(--primary)", color: "#071006" }}><Copy size={13} /> Copiar</button>
+                    <input readOnly value={billingCheckout.url} style={{ minWidth: 0, flex: 1, fontSize: "11px", fontWeight: 600, color: "var(--primary)" }} />
+                    <button onClick={() => { navigator.clipboard.writeText(billingCheckout.url); showToast("Link do checkout personalizado copiado!", "success"); }} style={{ padding: "8px 12px", background: "var(--primary)", color: "#071006", fontWeight: 800 }}><Copy size={13} /> Copiar</button>
+                    <a href={billingCheckout.url} target="_blank" rel="noreferrer" style={{ padding: "8px 12px", background: "var(--bg-card-subtle)", color: "#FFF", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-sm)", display: "inline-flex", alignItems: "center", gap: "5px", textDecoration: "none", fontSize: "12px", fontWeight: 600 }} title="Abrir checkout do cliente em nova aba"><ExternalLink size={13} /> Ver</a>
                   </div>
-                  {billingCheckout.expiresAt && <span style={{ display: "block", marginTop: "6px", color: "var(--text-dim)", fontSize: "10px" }}>Válido até {new Date(billingCheckout.expiresAt).toLocaleString("pt-BR")}</span>}
+                  {billingCheckout.expiresAt && <span style={{ display: "block", marginTop: "6px", color: "var(--text-dim)", fontSize: "10px" }}>Sessão Stripe sincronizada até {new Date(billingCheckout.expiresAt).toLocaleString("pt-BR")}</span>}
                 </div>
               ) : (
                 <button disabled={billingActionLoading || (Boolean(billingModalTenant.stripe_subscription_id) && normalizePlan(billingModalTenant.plan) === selectedBillingPlan)} onClick={() => handleStripeAction(billingModalTenant.id, billingModalTenant.stripe_subscription_id ? "change_plan" : "checkout")} style={{ width: "100%", padding: "10px", background: "var(--primary)", color: "#071006", fontWeight: 850 }}>
                   {billingActionLoading ? <RefreshCw size={14} className="animate-spin" /> : <CircleDollarSign size={15} />}
-                  {billingModalTenant.stripe_subscription_id ? `Alterar para ${PLAN_CATALOG[selectedBillingPlan].name}` : `Gerar checkout · ${PLAN_CATALOG[selectedBillingPlan].name}`}
+                  {billingModalTenant.stripe_subscription_id ? `Alterar para ${PLAN_CATALOG[selectedBillingPlan].name}` : `Gerar Link de Checkout · ${PLAN_CATALOG[selectedBillingPlan].name}`}
                 </button>
               )}
             </div>
@@ -5944,7 +5958,7 @@ export default function MasterDashboard() {
                 </button>
               )}
               {billingModalTenant.phone && billingCheckout?.url && (
-                <a href={`https://wa.me/55${billingModalTenant.phone.replace(/\D/g, "")}?text=${encodeURIComponent(`Olá! A mensalidade do sistema GIRAVO da oficina ${billingModalTenant.name} está disponível para pagamento. Acesse o checkout seguro: ${billingCheckout.url}`)}`} target="_blank" rel="noreferrer" style={{ padding: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: "7px", color: "#071006", background: "#25D366", textDecoration: "none", fontSize: "12px", fontWeight: 850, borderRadius: "8px" }}><MessageCircle size={15} /> Enviar no WhatsApp</a>
+                <a href={`https://wa.me/55${billingModalTenant.phone.replace(/\D/g, "")}?text=${encodeURIComponent(`Olá! A fatura da assinatura GIRAVO da oficina ${billingModalTenant.name} está pronta. Acesse o checkout seguro e oficial: ${billingCheckout.url}`)}`} target="_blank" rel="noreferrer" style={{ padding: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: "7px", color: "#071006", background: "#25D366", textDecoration: "none", fontSize: "12px", fontWeight: 850, borderRadius: "8px" }}><MessageCircle size={15} /> Enviar no WhatsApp</a>
               )}
               {billingModalTenant.stripe_customer_id && (
                 <button disabled={billingActionLoading} onClick={() => handleStripeAction(billingModalTenant.id, "portal")} style={{ padding: "10px", color: "#FFF", background: "var(--bg-card-subtle)", border: "1px solid var(--border-subtle)" }}><ExternalLink size={14} /> Abrir portal Stripe</button>

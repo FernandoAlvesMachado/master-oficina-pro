@@ -505,3 +505,256 @@ button:disabled {
   }
 }
 
+/* ========================================================================== */
+/* GIRAVO CUSTOM BRANDED CHECKOUT STYLES                                      */
+/* ========================================================================== */
+.checkout-page {
+  min-height: 100vh;
+  background: #06080D;
+  background-image: 
+    radial-gradient(ellipse at 50% 0%, rgba(158, 232, 36, 0.08) 0%, transparent 60%),
+    radial-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 100% 100%, 28px 28px;
+  color: #FFF;
+  font-family: var(--font-sans), 'Plus Jakarta Sans', sans-serif;
+  padding: 0 0 60px;
+}
+
+.checkout-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .checkout-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+
+.checkout-card {
+  background: linear-gradient(145deg, rgba(16, 22, 33, 0.95), rgba(10, 14, 21, 0.95));
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.checkout-plan-btn {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: #090D14;
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.checkout-plan-btn:hover {
+  border-color: var(--border-hover);
+  background: #0E1420;
+}
+
+.checkout-plan-btn.selected {
+  border-color: var(--primary);
+  background: rgba(158, 232, 36, 0.06);
+  box-shadow: 0 0 20px rgba(158, 232, 36, 0.15), inset 0 0 0 1px var(--primary);
+}
+
+.checkout-pay-btn {
+  width: 100%;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #9EE824 0%, #87D012 100%);
+  color: #06080D;
+  font-size: 15px;
+  font-weight: 900;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justifyContent: center;
+  gap: 10px;
+  box-shadow: 0 8px 24px rgba(158, 232, 36, 0.35);
+  transition: all 0.15s ease;
+  text-decoration: none;
+}
+
+.checkout-pay-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(158, 232, 36, 0.45);
+}
+
+.checkout-pay-btn:active {
+  transform: translateY(1px);
+}
+
+/* Embedded Checkout & Direct Payment Tabs */
+.payment-tabs-group {
+  display: flex;
+  gap: 8px;
+  background: #080C13;
+  padding: 5px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 20px;
+}
+
+.payment-tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justifyContent: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.payment-tab-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.payment-tab-btn.active {
+  background: #141B28;
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(158, 232, 36, 0.4);
+}
+
+.payment-tab-btn.active svg {
+  color: var(--primary);
+}
+
+.stripe-embed-box {
+  background: #0B1019;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 18px;
+  min-height: 380px;
+  position: relative;
+}
+
+/* Card Mock Preview */
+.titanium-card-preview {
+  background: linear-gradient(135deg, #1C2433 0%, #0E1420 50%, #080C14 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 20px 24px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  margin-bottom: 20px;
+  color: #fff;
+}
+
+.titanium-card-preview::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at 30% 30%, rgba(158, 232, 36, 0.12), transparent 45%);
+  pointer-events: none;
+}
+
+.card-chip {
+  width: 36px;
+  height: 28px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #ECC94B 0%, #D69E2E 50%, #B7791F 100%);
+  border: 1px solid #D69E2E;
+  position: relative;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.4);
+}
+
+.card-number-display {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 17px;
+  letter-spacing: 2px;
+  font-weight: 700;
+  margin: 18px 0 14px;
+  color: #F8FAFC;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+/* PIX Container */
+.pix-qr-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px;
+  background: #090D15;
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  text-align: center;
+}
+
+.pix-qr-wrapper {
+  background: #ffffff;
+  padding: 14px;
+  border-radius: 14px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  margin-bottom: 16px;
+  display: inline-flex;
+}
+
+.pix-code-pill {
+  width: 100%;
+  background: #06090F;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.pix-code-text {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 75%;
+}
+
+.pix-copy-btn {
+  padding: 8px 14px;
+  background: rgba(158, 232, 36, 0.15);
+  border: 1px solid rgba(158, 232, 36, 0.4);
+  color: var(--primary);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.pix-copy-btn:hover {
+  background: var(--primary);
+  color: #000;
+}
+
+

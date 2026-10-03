@@ -16,7 +16,7 @@ export async function middleware(req: NextRequest) {
       res.headers.set("Cache-Control", "no-store, max-age=0");
     }
     const devEval = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
-    res.headers.set("Content-Security-Policy", `default-src 'self'; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'${devEval}; connect-src 'self'`);
+    res.headers.set("Content-Security-Policy", `default-src 'self'; img-src 'self' data: blob: https: https://*.stripe.com; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' https://js.stripe.com https://*.stripe.com${devEval}; connect-src 'self' https://api.stripe.com https://checkout.stripe.com https://*.stripe.com; frame-src 'self' https://js.stripe.com https://checkout.stripe.com https://*.stripe.com;`);
     if (process.env.NODE_ENV === "production") {
       res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }
@@ -46,12 +46,14 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // Permite rota de login (/api/auth via POST), envio de leads da landing page (/api/leads via POST) e requisições OPTIONS (CORS)
+  // Permite rotas públicas como login, webhook, leads e consulta de pagamento/fatura
   if (
     (pathname === "/api/auth" && req.method === "POST") ||
     (pathname === "/api/leads" && req.method === "POST") ||
     (pathname === "/api/stripe/webhook" && req.method === "POST") ||
     (pathname === "/api/billing/client" && req.method === "GET") ||
+    pathname.startsWith("/api/pagamento") ||
+    pathname.startsWith("/api/checkout") ||
     req.method === "OPTIONS"
   ) {
     return applySecurityHeaders(NextResponse.next());
