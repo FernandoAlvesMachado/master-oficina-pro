@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query, hashPassword, ensureTablesOnce, withTransaction } from "@/lib/db";
 import { verifyRequestAuth } from "@/lib/auth";
+import { cleanText, integerInRange, isRecord, isValidEmail, publicError, TENANT_STATUSES } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -84,29 +85,44 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
-      name,
-      ownerName = name,
-      email,
-      phone,
-      password = "123",
-      plan = "PRO",
+      name: rawName,
+      ownerName: rawOwnerName,
+      email: rawEmail,
+      phone: rawPhone,
+      password: rawPassword,
+      plan: rawPlan = "PRO",
       daysValid = 30,
       enabledFeatures: customFeatures,
       leadId,
       status: requestedStatus,
     } = body;
 
-    if (!name || !email) {
+    const name = cleanText(rawName, 255);
+    const ownerName = cleanText(rawOwnerName || rawName, 255);
+    const email = cleanText(rawEmail, 254).toLowerCase();
+    const phone = cleanText(rawPhone, 50);
+    const password = cleanText(rawPassword, 128);
+    const plan = cleanText(rawPlan, 50).toUpperCase();
+    const validDays = integerInRange(daysValid, 1, 3650);
+
+    if (!name || !ownerName || !isValidEmail(email) || password.length < 8 || !validDays) {
       return NextResponse.json(
-        { success: false, error: "Nome da oficina e E-mail são obrigatórios." },
+        { success: false, error: "Informe oficina, responsável, e-mail válido, senha com 8+ caracteres e validade entre 1 e 3650 dias." },
         { status: 400 }
       );
+    }
+
+    if (customFeatures !== undefined && (!isRecord(customFeatures) || Object.values(customFeatures).some((v) => typeof v !== "boolean"))) {
+      return NextResponse.json({ success: false, error: "Permissões de módulos inválidas." }, { status: 400 });
+    }
+    if (requestedStatus && !TENANT_STATUSES.includes(requestedStatus)) {
+      return NextResponse.json({ success: false, error: "Status da oficina inválido." }, { status: 400 });
     }
 
     const tenantId = `tenant-${Date.now()}`;
     const userId = `usr-${Date.now()}`;
     const passwordHash = hashPassword(password);
-    const expiresAt = new Date(Date.now() + Number(daysValid) * 86400000);
+    const expiresAt = new Date(Date.now() + validDays * 86400000);
     const isTrial = plan === "TRIAL" || requestedStatus === "TRIAL";
     const tenantStatus = requestedStatus || (isTrial ? "TRIAL" : "ACTIVE");
     const trialUntil = isTrial ? expiresAt.toISOString() : null;
@@ -134,7 +150,9 @@ export async function POST(req: NextRequest) {
       userRole: "Administrador / Proprietário",
     };
 
-    await query(
+    await ensureTablesOnce();
+    await withTransaction(async (client) => {
+      await client.query(
       `INSERT INTO tenants (id, name, owner_name, email, phone, plan, status, trial_until, expires_at, enabled_features, company_settings)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
@@ -150,31 +168,30 @@ export async function POST(req: NextRequest) {
         JSON.stringify(defaultFeatures),
         JSON.stringify(initialSettings),
       ]
-    );
+      );
 
-    await query(
+      await client.query(
       `INSERT INTO users (id, tenant_id, name, email, password_hash, phone, role, is_active)
        VALUES ($1, $2, $3, $4, $5, $6, 'ADMIN', true)`,
       [userId, tenantId, ownerName, email.toLowerCase().trim(), passwordHash, phone]
-    );
+      );
 
-    await query(
+      await client.query(
       `INSERT INTO tenant_store (tenant_id, company_settings)
        VALUES ($1, $2) ON CONFLICT (tenant_id) DO NOTHING`,
       [tenantId, JSON.stringify(initialSettings)]
-    );
+      );
 
     // Se a oficina foi originada de um Lead pendente, marca como APROVADO e associa o tenant
     if (leadId) {
       try {
-        await query(
+        await client.query(
           `UPDATE leads SET status = 'APPROVED', tenant_id = $1 WHERE id = $2`,
           [tenantId, leadId]
         );
-      } catch (leadErr) {
-        console.warn("Aviso ao vincular lead com tenant:", leadErr);
-      }
+      } catch (leadErr) { console.warn("Aviso ao vincular lead com tenant:", leadErr); }
     }
+    });
 
     return NextResponse.json({
       success: true,
@@ -185,7 +202,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     console.error("Erro ao criar tenant:", err);
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: publicError(err) }, { status: 500 });
   }
 }
 
@@ -203,28 +220,45 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: "tenantId é obrigatório" }, { status: 400 });
     }
 
+    if (status && !TENANT_STATUSES.includes(status)) {
+      return NextResponse.json({ success: false, error: "Status da oficina inválido." }, { status: 400 });
+    }
+    if (enabledFeatures !== undefined && (!isRecord(enabledFeatures) || Object.values(enabledFeatures).some((v) => typeof v !== "boolean"))) {
+      return NextResponse.json({ success: false, error: "Permissões de módulos inválidas." }, { status: 400 });
+    }
+    if (newPassword !== undefined && cleanText(newPassword, 128).length < 8) {
+      return NextResponse.json({ success: false, error: "A nova senha deve ter pelo menos 8 caracteres." }, { status: 400 });
+    }
+
     let computedExpiresAt: string | null = null;
 
     if (setRemainingDays !== undefined && setRemainingDays !== null) {
-      computedExpiresAt = new Date(Date.now() + Number(setRemainingDays) * 86400000).toISOString();
+      const days = integerInRange(setRemainingDays, 0, 3650);
+      if (days === null) return NextResponse.json({ success: false, error: "Quantidade de dias inválida." }, { status: 400 });
+      computedExpiresAt = new Date(Date.now() + days * 86400000).toISOString();
     } else if (setExactExpiresAt) {
-      computedExpiresAt = new Date(setExactExpiresAt).toISOString();
+      const exactDate = new Date(setExactExpiresAt);
+      if (Number.isNaN(exactDate.getTime())) return NextResponse.json({ success: false, error: "Data de vencimento inválida." }, { status: 400 });
+      computedExpiresAt = exactDate.toISOString();
     } else if (addDays) {
+      const days = integerInRange(addDays, 1, 3650);
+      if (!days) return NextResponse.json({ success: false, error: "Quantidade de dias inválida." }, { status: 400 });
       const cur = await query("SELECT expires_at FROM tenants WHERE id = $1", [tenantId]);
+      if (!cur.length) return NextResponse.json({ success: false, error: "Conta não encontrada." }, { status: 404 });
       const base =
         cur[0]?.expires_at && new Date(cur[0].expires_at) > new Date()
           ? new Date(cur[0].expires_at)
           : new Date();
-      computedExpiresAt = new Date(base.getTime() + Number(addDays) * 86400000).toISOString();
+      computedExpiresAt = new Date(base.getTime() + days * 86400000).toISOString();
     }
 
-    await query(
+    const updated = await query(
       `UPDATE tenants SET
          status = COALESCE($1, status),
          expires_at = COALESCE($2, expires_at),
          enabled_features = COALESCE($3, enabled_features),
          updated_at = NOW()
-       WHERE id = $4`,
+       WHERE id = $4 RETURNING id`,
       [
         status || null,
         computedExpiresAt,
@@ -232,6 +266,7 @@ export async function PATCH(req: NextRequest) {
         tenantId,
       ]
     );
+    if (!updated.length) return NextResponse.json({ success: false, error: "Conta não encontrada." }, { status: 404 });
 
     if (newPassword) {
       const newHash = hashPassword(newPassword);
@@ -244,7 +279,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: true, newExpiresAt: computedExpiresAt, isDemoMode: false });
   } catch (err: any) {
     console.error("Erro ao atualizar tenant:", err);
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: publicError(err) }, { status: 500 });
   }
 }
 

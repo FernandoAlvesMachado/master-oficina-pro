@@ -12,6 +12,9 @@ export async function middleware(req: NextRequest) {
     res.headers.set("X-XSS-Protection", "1; mode=block");
     res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
     res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (pathname.startsWith("/api/")) {
+      res.headers.set("Cache-Control", "no-store, max-age=0");
+    }
     const devEval = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
     res.headers.set("Content-Security-Policy", `default-src 'self'; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'${devEval}; connect-src 'self'`);
     if (process.env.NODE_ENV === "production") {

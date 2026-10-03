@@ -104,6 +104,30 @@ interface ChatMessage {
   read: boolean;
 }
 
+const CORE_FEATURES = [
+  { key: "ordens_servico", label: "Ordens de Serviço e Orçamentos", shortLabel: "O.S.", desc: "Abertura de O.S. e cadastro de veículos" },
+  { key: "checklist_fotos", label: "Checklist com Fotos da O.S.", shortLabel: "Fotos Vistoria", desc: "Vistoria veicular fotográfica de entrada/saída" },
+  { key: "estoque_pecas", label: "Controle de Estoque & Peças", shortLabel: "Estoque", desc: "Controle de peças, compras e margem" },
+  { key: "pdv_balcao", label: "Frente de Caixa (PDV Balcão)", shortLabel: "PDV", desc: "Vendas diretas de peças e produtos no balcão" },
+  { key: "financeiro", label: "Financeiro & Contas", shortLabel: "Financeiro", desc: "Fluxo de caixa diário e contas a pagar/receber" },
+  { key: "whatsapp_crm", label: "WhatsApp CRM & Mensagens", shortLabel: "WhatsApp CRM", desc: "Avisos e relacionamento pelo WhatsApp" },
+  { key: "relatorios", label: "Relatórios Gerenciais & DRE", shortLabel: "Relatórios", desc: "Métricas de lucratividade e faturamento" },
+];
+
+function featureDefinitions(flags: Record<string, boolean> = {}) {
+  const known = new Set(CORE_FEATURES.map((feature) => feature.key));
+  const discovered = Object.keys(flags)
+    .filter((key) => !known.has(key))
+    .sort()
+    .map((key) => ({
+      key,
+      label: key.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
+      shortLabel: key.replace(/_/g, " "),
+      desc: "Módulo sincronizado automaticamente pela oficina",
+    }));
+  return [...CORE_FEATURES, ...discovered];
+}
+
 export default function MasterDashboard() {
   // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
@@ -914,7 +938,7 @@ export default function MasterDashboard() {
     const currentFlags = featuresModalTenant.enabled_features || {};
     const updatedFeatures = {
       ...currentFlags,
-      [featureKey]: !currentFlags[featureKey],
+      [featureKey]: currentFlags[featureKey] === false,
     };
 
     setFeaturesModalTenant({
@@ -945,25 +969,16 @@ export default function MasterDashboard() {
     let preset: Record<string, boolean> = {};
 
     if (presetType === "all") {
-      preset = {
-        ordens_servico: true,
-        checklist_fotos: true,
-        estoque_pecas: true,
-        pdv_balcao: true,
-        financeiro: true,
-        whatsapp_crm: true,
-        relatorios: true,
-      };
+      preset = Object.fromEntries(
+        featureDefinitions(featuresModalTenant.enabled_features).map((feature) => [feature.key, true])
+      );
     } else {
-      preset = {
-        ordens_servico: true,
-        checklist_fotos: true,
-        estoque_pecas: false,
-        pdv_balcao: false,
-        financeiro: false,
-        whatsapp_crm: false,
-        relatorios: false,
-      };
+      preset = Object.fromEntries(
+        featureDefinitions(featuresModalTenant.enabled_features).map((feature) => [
+          feature.key,
+          feature.key === "ordens_servico" || feature.key === "checklist_fotos",
+        ])
+      );
     }
 
     setFeaturesModalTenant({
@@ -2976,14 +2991,7 @@ export default function MasterDashboard() {
 
                   {/* Active features badges */}
                   <div style={{ display: "flex", gap: "5px", flexWrap: "wrap" }}>
-                    {[
-                      { key: "ordens_servico", label: "O.S." },
-                      { key: "checklist_fotos", label: "Fotos Vistoria" },
-                      { key: "estoque_pecas", label: "Estoque" },
-                      { key: "pdv_balcao", label: "PDV" },
-                      { key: "financeiro", label: "Financeiro" },
-                      { key: "whatsapp_crm", label: "WhatsApp CRM" },
-                    ].map((feat) => {
+                    {featureDefinitions(currentOperationalTenant.enabled_features).map((feat) => {
                       const enabled = currentOperationalTenant.enabled_features?.[feat.key] !== false;
                       return (
                         <span
@@ -2999,7 +3007,7 @@ export default function MasterDashboard() {
                           }}
                         >
                           {enabled ? "✓ " : "✗ "}
-                          {feat.label}
+                          {feat.shortLabel}
                         </span>
                       );
                     })}
@@ -5336,15 +5344,7 @@ export default function MasterDashboard() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "340px", overflowY: "auto" }}>
-              {[
-                { key: "ordens_servico", label: "Ordens de Serviço e Orçamentos", desc: "Abertura de O.S. e cadastro de veículos" },
-                { key: "checklist_fotos", label: "Checklist com Fotos da O.S.", desc: "Vistoria veicular fotográfica de entrada/saída" },
-                { key: "estoque_pecas", label: "Controle de Estoque & Peças", desc: "Controle de peças, compras e margem" },
-                { key: "pdv_balcao", label: "Frente de Caixa (PDV Balcão)", desc: "Vendas diretas de peças e produtos no balcão" },
-                { key: "financeiro", label: "Financeiro & Contas", desc: "Fluxo de caixa diário e contas a pagar/receber" },
-                { key: "whatsapp_crm", label: "WhatsApp CRM & Mensagens", desc: "Avisos de carro pronto no WhatsApp" },
-                { key: "relatorios", label: "Relatórios Gerenciais & DRE", desc: "Métricas de lucratividade e faturamento" },
-              ].map((f) => {
+              {featureDefinitions(featuresModalTenant.enabled_features).map((f) => {
                 const isChecked = featuresModalTenant.enabled_features?.[f.key] !== false;
                 return (
                   <div

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { query, isDbConfigured } from "@/lib/db";
+import { query, isDbConfigured, ensureTablesOnce } from "@/lib/db";
+import { publicError } from "@/lib/validation";
 import { verifyRequestAuth } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ export async function GET(req: NextRequest) {
 
   try {
     if (isDbConfigured()) {
+      await ensureTablesOnce();
       // 1. Busca dados da loja/oficina na tabela tenant_store
       const storeRes = await query(
         `SELECT vehicles, service_orders, clients, products, sales, receivables, payables, company_settings, updated_at
@@ -37,7 +39,7 @@ export async function GET(req: NextRequest) {
       const checklistsRes = await query(
         `SELECT os_id, photos, fuel_level, damage_notes, tires_condition, updated_at
          FROM vehicle_checklists
-         WHERE tenant_id = $1 OR tenant_id IS NULL`,
+         WHERE tenant_id = $1`,
         [tenantId]
       );
 
@@ -93,7 +95,7 @@ export async function GET(req: NextRequest) {
                   c.os_id === v.currentOs ||
                   c.os_id === `OS-${v.currentOs}` ||
                   (v.currentOs && c.os_id && String(c.os_id).includes(String(v.currentOs)))
-              ) || checklistsRes[0];
+              );
 
             if (match) {
               const extraPhotos = getPhotosArray(match.photos);
@@ -140,7 +142,7 @@ export async function GET(req: NextRequest) {
               (c: any) =>
                 c.os_id === (os.id || os.osNumber) ||
                 (c.os_id && String(c.os_id).includes(String(os.id || os.osNumber)))
-            ) || checklistsRes[0];
+            );
 
           if (match) {
             const extraPhotos = getPhotosArray(match.photos);
@@ -200,7 +202,8 @@ export async function GET(req: NextRequest) {
         if (typeof val === "number") return val;
         if (!val) return 0;
         const cleaned = String(val)
-          .replace(/[^\d,-]/g, "")
+          .replace(/[^\d,.-]/g, "")
+          .replace(/\.(?=\d{3}(?:\D|$))/g, "")
           .replace(",", ".");
         const parsed = parseFloat(cleaned);
         return isNaN(parsed) ? 0 : parsed;
@@ -276,7 +279,7 @@ export async function GET(req: NextRequest) {
     }
   } catch (err: any) {
     console.error("[OPERATIONAL API ERROR]", err);
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: publicError(err) }, { status: 500 });
   }
 
   return NextResponse.json({

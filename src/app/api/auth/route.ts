@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createSessionToken, verifyRequestAuth, COOKIE_NAME, LEGACY_COOKIE_NAME } from "@/lib/auth";
+import { publicError } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -20,6 +21,10 @@ function getClientIp(req: NextRequest): string {
 
 export async function POST(req: NextRequest) {
   try {
+    const contentLength = Number(req.headers.get("content-length") || 0);
+    if (contentLength > 4096) {
+      return NextResponse.json({ success: false, error: "Solicitação inválida." }, { status: 413 });
+    }
     const ip = getClientIp(req);
     const now = Date.now();
     const entry = loginAttempts.get(ip) || { attempts: 0, blockedUntil: 0 };
@@ -46,7 +51,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const suppliedHash = crypto.createHash("sha256").update(String(password || "")).digest();
+    const suppliedPassword = typeof password === "string" ? password.slice(0, 1024) : "";
+    const suppliedHash = crypto.createHash("sha256").update(suppliedPassword).digest();
     const expectedHash = crypto.createHash("sha256").update(configuredPassword).digest();
     if (crypto.timingSafeEqual(suppliedHash, expectedHash)) {
       // Sucesso: reseta tentativas
@@ -94,7 +100,7 @@ export async function POST(req: NextRequest) {
       { status: 401 }
     );
   } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: publicError(err, "Falha ao processar o login.") }, { status: 500 });
   }
 }
 

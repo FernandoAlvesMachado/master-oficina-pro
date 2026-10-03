@@ -199,15 +199,46 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
     await client.query(`
       CREATE TABLE IF NOT EXISTS tenant_store (
         tenant_id VARCHAR(64) PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+        vehicles JSONB NOT NULL DEFAULT '[]'::jsonb,
+        service_orders JSONB NOT NULL DEFAULT '[]'::jsonb,
+        clients JSONB NOT NULL DEFAULT '[]'::jsonb,
+        products JSONB NOT NULL DEFAULT '[]'::jsonb,
+        sales JSONB NOT NULL DEFAULT '[]'::jsonb,
+        receivables JSONB NOT NULL DEFAULT '[]'::jsonb,
+        payables JSONB NOT NULL DEFAULT '[]'::jsonb,
         company_settings JSONB DEFAULT '{}'::jsonb,
         chat_data JSONB NOT NULL DEFAULT '{"messages":[],"status":"OPEN"}'::jsonb,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
       ALTER TABLE tenant_store
+        ADD COLUMN IF NOT EXISTS vehicles JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS service_orders JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS clients JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS products JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS sales JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS receivables JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS payables JSONB NOT NULL DEFAULT '[]'::jsonb,
         ADD COLUMN IF NOT EXISTS chat_data JSONB NOT NULL DEFAULT '{"messages":[],"status":"OPEN"}'::jsonb;
     `);
 
-    // 5. Tabela chat_messages (Suporte Master x Oficinas)
+    // 5. Vistorias fotográficas sempre isoladas por oficina.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS vehicle_checklists (
+        id VARCHAR(64) PRIMARY KEY,
+        tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        os_id VARCHAR(128),
+        photos JSONB NOT NULL DEFAULT '[]'::jsonb,
+        fuel_level VARCHAR(50),
+        damage_notes TEXT,
+        tires_condition VARCHAR(100),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_vehicle_checklists_tenant_os
+        ON vehicle_checklists(tenant_id, os_id);
+    `);
+
+    // 6. Tabela chat_messages (Suporte Master x Oficinas)
     await client.query(`
       CREATE TABLE IF NOT EXISTS chat_messages (
         id VARCHAR(64) PRIMARY KEY,
@@ -222,7 +253,7 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
       CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at);
     `);
 
-    // 6. Tabela chat_threads (Controle de Atendimento Aberto x Arquivado)
+    // 7. Tabela chat_threads (Controle de Atendimento Aberto x Arquivado)
     await client.query(`
       CREATE TABLE IF NOT EXISTS chat_threads (
         tenant_id VARCHAR(64) PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
@@ -286,7 +317,7 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
     return {
       success: true,
       message: "Todas as tabelas do sistema GIRAVO estão ativas e sincronizadas no PostgreSQL!",
-      tables: ["tenants", "users", "leads", "tenant_store", "chat_messages", "chat_threads"],
+      tables: ["tenants", "users", "leads", "tenant_store", "vehicle_checklists", "chat_messages", "chat_threads"],
     };
   } finally {
     client.release();
