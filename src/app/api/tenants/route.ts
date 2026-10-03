@@ -43,6 +43,8 @@ export async function GET(req: NextRequest) {
         t.billing_grace_until,
         t.billing_block_reason,
         t.stripe_last_invoice_id,
+        t.billing_failure_reason,
+        t.billing_attempt_count,
         t.created_at,
         COUNT(u.id)::int as users_count,
         MAX(u.last_login_at) as last_login_at

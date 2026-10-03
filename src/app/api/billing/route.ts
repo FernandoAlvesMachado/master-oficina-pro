@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+import crypto from "crypto";
 import { verifyRequestAuth } from "@/lib/auth";
 import { ensureTablesOnce, query } from "@/lib/db";
 import { getStripe, isStripeConfigured } from "@/lib/stripe";
@@ -122,7 +123,9 @@ export async function POST(req: NextRequest) {
     const tenantId = typeof body.tenantId === "string" ? body.tenantId : "";
     const action = body.action;
     const tenants = await query<any>(
-      `SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id FROM tenants WHERE id = $1 LIMIT 1`, [tenantId]
+      `SELECT id, name, email, plan, stripe_customer_id, stripe_subscription_id,
+              billing_checkout_url, billing_checkout_expires_at, pending_plan
+       FROM tenants WHERE id = $1 LIMIT 1`, [tenantId]
     );
     const tenant = tenants[0];
     if (!tenant) return NextResponse.json({ success: false, error: "Oficina não encontrada." }, { status: 404 });
@@ -130,6 +133,42 @@ export async function POST(req: NextRequest) {
     const stripe = getStripe();
     const returnUrl = `${req.nextUrl.origin}/`;
     let stripeCustomerId = tenant.stripe_customer_id as string | null;
+
+    if (action === "send_checkout_notification") {
+      const checkoutValid = tenant.billing_checkout_url && tenant.billing_checkout_expires_at && new Date(tenant.billing_checkout_expires_at) > new Date();
+      if (!checkoutValid) {
+        return NextResponse.json({ success: false, error: "Gere um checkout válido antes de enviar a notificação." }, { status: 409 });
+      }
+      const selectedPlan = normalizePlan(tenant.pending_plan || tenant.plan) || "PROFISSIONAL";
+      const plan = PLAN_CATALOG[selectedPlan];
+      const timestamp = new Date().toISOString();
+      const message = {
+        id: `billing-${crypto.randomUUID()}`,
+        tenantId: tenant.id,
+        sender: "MASTER",
+        senderName: "Financeiro GIRAVO",
+        text: `Sua assinatura do plano ${plan.name} está pronta. Conclua o pagamento para manter todos os recursos ativos.`,
+        timestamp,
+        read: false,
+        type: "BILLING_CHECKOUT",
+        actionUrl: tenant.billing_checkout_url,
+        actionLabel: "Assinar plano",
+        billingPlan: selectedPlan,
+        amountCents: plan.priceCents,
+        expiresAt: tenant.billing_checkout_expires_at,
+      };
+      const notified = await query(
+        `UPDATE tenant_store SET chat_data = jsonb_set(
+           jsonb_set(COALESCE(chat_data, '{"messages":[],"status":"OPEN"}'::jsonb), '{messages}',
+             COALESCE(chat_data->'messages', '[]'::jsonb) || $2::jsonb, true),
+           '{status}', '"OPEN"'::jsonb, true
+         ) || jsonb_build_object('lastMessageAt', $3::text), updated_at = NOW()
+         WHERE tenant_id = $1 RETURNING tenant_id`,
+        [tenant.id, JSON.stringify([message]), timestamp]
+      );
+      if (!notified.length) return NextResponse.json({ success: false, error: "Canal da oficina não encontrado." }, { status: 404 });
+      return NextResponse.json({ success: true, message });
+    }
 
     if (action === "portal") {
       if (!stripeCustomerId) return NextResponse.json({ success: false, error: "Esta oficina ainda não possui cliente Stripe." }, { status: 409 });

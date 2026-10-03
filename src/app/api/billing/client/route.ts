@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
     `SELECT t.id, t.status, t.expires_at, t.plan, t.max_users, t.enabled_features,
             t.billing_status, t.billing_grace_until, t.billing_block_reason,
             t.billing_checkout_url, t.billing_checkout_expires_at, t.last_payment_at,
+            t.billing_failure_reason, t.billing_attempt_count,
             (SELECT COUNT(*)::int FROM users u WHERE u.tenant_id = t.id AND u.is_active = TRUE) AS active_users
      FROM tenants t WHERE t.id = $1 LIMIT 1`,
     [tenantId]
@@ -53,6 +54,8 @@ export async function GET(req: NextRequest) {
       lastPaymentAt: tenant.last_payment_at,
       checkoutUrl: checkoutValid ? tenant.billing_checkout_url : null,
       checkoutExpiresAt: checkoutValid ? tenant.billing_checkout_expires_at : null,
+      failureReason: tenant.billing_failure_reason,
+      paymentAttempts: tenant.billing_attempt_count,
     },
     entitlements: {
       plan: tenant.plan,

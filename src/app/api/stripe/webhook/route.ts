@@ -68,8 +68,25 @@ export async function POST(req: NextRequest) {
           `UPDATE tenants SET stripe_customer_id = COALESCE($1, stripe_customer_id),
              stripe_subscription_id = COALESCE($2, stripe_subscription_id),
              billing_status = 'CHECKOUT_COMPLETED', pending_plan = COALESCE($4, pending_plan), billing_checkout_url = NULL,
-             billing_checkout_expires_at = NULL, updated_at = NOW() WHERE id = $3`,
+             billing_checkout_expires_at = NULL, billing_failure_reason = NULL,
+             billing_attempt_count = 0, updated_at = NOW() WHERE id = $3`,
           [stripeCustomerId, subscriptionId, tenantId, selectedPlan]
+        );
+      }
+    }
+
+    if (event.type === "checkout.session.expired" || event.type === "checkout.session.async_payment_failed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const tenantId = session.metadata?.tenant_id || session.client_reference_id;
+      if (tenantId) {
+        const reason = event.type === "checkout.session.expired"
+          ? "O cliente não concluiu o checkout dentro do prazo de validade."
+          : "O meio de pagamento assíncrono foi recusado pela Stripe.";
+        await client.query(
+          `UPDATE tenants SET billing_status = $1, billing_failure_reason = $2,
+             billing_checkout_url = NULL, billing_checkout_expires_at = NULL, updated_at = NOW()
+           WHERE id = $3`,
+          [event.type === "checkout.session.expired" ? "CHECKOUT_EXPIRED" : "PAYMENT_FAILED", reason, tenantId]
         );
       }
     }
@@ -100,6 +117,7 @@ export async function POST(req: NextRequest) {
           await client.query(
             `UPDATE tenants SET billing_status = 'PAID', last_payment_at = NOW(),
                stripe_last_invoice_id = $1, billing_grace_until = NULL,
+               billing_failure_reason = NULL, billing_attempt_count = 0,
                billing_checkout_url = NULL, billing_checkout_expires_at = NULL,
                status = CASE WHEN billing_block_reason = 'PAYMENT_OVERDUE' THEN 'ACTIVE' ELSE status END,
                billing_block_reason = CASE WHEN billing_block_reason = 'PAYMENT_OVERDUE' THEN NULL ELSE billing_block_reason END,
@@ -129,11 +147,14 @@ export async function POST(req: NextRequest) {
           const mustBlock = (invoice.attempt_count || 0) >= 2 || graceDays === 0;
           await client.query(
             `UPDATE tenants SET billing_status = 'PAST_DUE', stripe_last_invoice_id = $1,
+               billing_failure_reason = $5, billing_attempt_count = $6,
                billing_grace_until = COALESCE(billing_grace_until, NOW() + ($2 * INTERVAL '1 day')),
                status = CASE WHEN $3 AND status <> 'BLOCKED' THEN 'BLOCKED' ELSE status END,
                billing_block_reason = CASE WHEN $3 AND status <> 'BLOCKED' THEN 'PAYMENT_OVERDUE' ELSE billing_block_reason END,
                updated_at = NOW() WHERE id = $4`,
-            [invoice.id, graceDays, mustBlock, tenant.rows[0].id]
+            [invoice.id, graceDays, mustBlock, tenant.rows[0].id,
+              invoice.last_finalization_error?.message || "A Stripe não conseguiu confirmar o pagamento da mensalidade.",
+              invoice.attempt_count || 1]
           );
         }
       }

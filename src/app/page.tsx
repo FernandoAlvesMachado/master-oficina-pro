@@ -94,6 +94,8 @@ interface Tenant {
   billing_checkout_expires_at?: string | null;
   billing_grace_until?: string | null;
   billing_block_reason?: string | null;
+  billing_failure_reason?: string | null;
+  billing_attempt_count?: number;
 }
 
 interface Lead {
@@ -1187,7 +1189,7 @@ export default function MasterDashboard() {
     }
   };
 
-  const handleStripeAction = async (tenantId: string, action: "checkout" | "portal" | "change_plan") => {
+  const handleStripeAction = async (tenantId: string, action: "checkout" | "portal" | "change_plan" | "send_checkout_notification") => {
     setBillingActionLoading(true);
     try {
       const res = await fetch("/api/billing", {
@@ -1205,9 +1207,12 @@ export default function MasterDashboard() {
         setBillingCheckout({ url: data.url, expiresAt: data.expiresAt });
         await fetchTenants();
         showToast("Checkout gerado e vinculado à oficina!", "success");
-      } else {
+      } else if (action === "change_plan") {
         await fetchTenants();
         showToast(`Alteração para o plano ${PLAN_CATALOG[selectedBillingPlan].name} enviada à Stripe.`, "success");
+      } else {
+        await fetchChatMessages(true);
+        showToast("Cobrança enviada como notificação para a oficina!", "success");
       }
       setActionMenuTenantId(null);
     } catch (error: any) {
@@ -5268,6 +5273,14 @@ export default function MasterDashboard() {
               </div>
             )}
 
+            {billingModalTenant.billing_failure_reason && (
+              <div style={{ padding: "10px 12px", marginBottom: "14px", color: "#FDE68A", background: "rgba(245,158,11,.08)", border: "1px solid rgba(245,158,11,.25)", fontSize: "11.5px" }}>
+                <strong style={{ display: "block", marginBottom: "2px" }}>Pagamento não concluído</strong>
+                {billingModalTenant.billing_failure_reason}
+                {billingModalTenant.billing_attempt_count ? ` · ${billingModalTenant.billing_attempt_count} tentativa(s)` : ""}
+              </div>
+            )}
+
             <div style={{ marginBottom: "15px" }}>
               <span style={{ display: "block", marginBottom: "8px", color: "var(--text-muted)", fontSize: "10px", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".08em" }}>Escolha o plano da assinatura</span>
               <div className="billing-plan-grid">
@@ -5306,7 +5319,12 @@ export default function MasterDashboard() {
               )}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: billingModalTenant.phone && billingCheckout?.url ? "1fr 1fr" : "1fr", gap: "9px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "9px" }}>
+              {billingCheckout?.url && (
+                <button disabled={billingActionLoading} onClick={() => handleStripeAction(billingModalTenant.id, "send_checkout_notification")} style={{ padding: "10px", color: "#071006", background: "var(--primary)", fontWeight: 850 }}>
+                  <Bell size={14} /> Enviar no sistema
+                </button>
+              )}
               {billingModalTenant.phone && billingCheckout?.url && (
                 <a href={`https://wa.me/55${billingModalTenant.phone.replace(/\D/g, "")}?text=${encodeURIComponent(`Olá! A mensalidade do sistema GIRAVO da oficina ${billingModalTenant.name} está disponível para pagamento. Acesse o checkout seguro: ${billingCheckout.url}`)}`} target="_blank" rel="noreferrer" style={{ padding: "10px", display: "flex", alignItems: "center", justifyContent: "center", gap: "7px", color: "#071006", background: "#25D366", textDecoration: "none", fontSize: "12px", fontWeight: 850, borderRadius: "8px" }}><MessageCircle size={15} /> Enviar no WhatsApp</a>
               )}

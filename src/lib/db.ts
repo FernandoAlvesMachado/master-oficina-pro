@@ -169,6 +169,8 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
         billing_grace_until TIMESTAMPTZ,
         billing_block_reason VARCHAR(50),
         stripe_last_invoice_id VARCHAR(255),
+        billing_failure_reason TEXT,
+        billing_attempt_count INTEGER DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
@@ -185,6 +187,9 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
         ADD COLUMN IF NOT EXISTS billing_grace_until TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS billing_block_reason VARCHAR(50),
         ADD COLUMN IF NOT EXISTS stripe_last_invoice_id VARCHAR(255);
+      ALTER TABLE tenants
+        ADD COLUMN IF NOT EXISTS billing_failure_reason TEXT,
+        ADD COLUMN IF NOT EXISTS billing_attempt_count INTEGER DEFAULT 0;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_stripe_customer
         ON tenants(stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
       UPDATE tenants SET plan = CASE
