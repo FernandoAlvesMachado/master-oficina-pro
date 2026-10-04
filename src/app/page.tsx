@@ -7360,7 +7360,7 @@ export default function MasterDashboard() {
 
         <button
           type="button"
-          className="mobile-nav-item"
+          className={`mobile-nav-item ${activeNav === "access" || activeNav === "db" ? "active" : ""}`}
           onClick={() => setIsMobileDrawerOpen(true)}
         >
           <MoreVertical size={20} />
@@ -7426,6 +7426,36 @@ export default function MasterDashboard() {
               >
                 <Plus size={16} />
                 <span>Cadastrar Nova Oficina</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileDrawerOpen(false);
+                  setActiveNav("access");
+                }}
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  background: activeNav === "access" ? "rgba(158, 232, 36, 0.12)" : "var(--bg-card)",
+                  border: activeNav === "access" ? "1px solid rgba(158, 232, 36, 0.35)" : "1px solid var(--border-subtle)",
+                  color: activeNav === "access" ? "var(--primary)" : "#FFF",
+                  borderRadius: "var(--radius-sm)",
+                  fontWeight: 700,
+                  fontSize: "13px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "10px",
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <KeyRound size={16} color="var(--primary)" />
+                  <span>Usuários & Acessos</span>
+                </span>
+                <span style={{ fontSize: "10px", color: "var(--text-dim)" }}>
+                  {tenants.reduce((total, tenant) => total + Number(tenant.users_count || 0), 0)} usuários
+                </span>
               </button>
 
               <button
