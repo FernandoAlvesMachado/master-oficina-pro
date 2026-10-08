@@ -119,9 +119,9 @@ export async function POST(req: NextRequest) {
     const plan = normalizePlan(rawPlan) || "PROFISSIONAL";
     const validDays = integerInRange(daysValid, 1, 3650);
 
-    if (!name || !ownerName || !isValidEmail(email) || password.length < 8 || !validDays) {
+    if (!name || !ownerName || !isValidEmail(email) || password.length < 6 || !validDays) {
       return NextResponse.json(
-        { success: false, error: "Informe oficina, responsável, e-mail válido, senha com 8+ caracteres e validade entre 1 e 3650 dias." },
+        { success: false, error: "Informe oficina, responsável, e-mail válido, senha com pelo menos 6 caracteres e validade entre 1 e 3650 dias." },
         { status: 400 }
       );
     }
@@ -158,6 +158,15 @@ export async function POST(req: NextRequest) {
     };
 
     await ensureTablesOnce();
+
+    const existingTenant = await query<{ id: string }>("SELECT id FROM tenants WHERE LOWER(email) = $1 LIMIT 1", [email]);
+    if (existingTenant.length > 0) {
+      return NextResponse.json(
+        { success: false, error: "Já existe uma oficina cadastrada com este e-mail. Utilize outro e-mail." },
+        { status: 409 }
+      );
+    }
+
     await withTransaction(async (client) => {
       await client.query(
       `INSERT INTO tenants (id, name, owner_name, email, phone, plan, max_users, status, trial_until, expires_at, enabled_features, company_settings)
@@ -210,7 +219,13 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     console.error("Erro ao criar tenant:", err);
-    return NextResponse.json({ success: false, error: publicError(err) }, { status: 500 });
+    if (err?.code === "23505") {
+      return NextResponse.json(
+        { success: false, error: "Já existe uma oficina cadastrada com este e-mail." },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ success: false, error: publicError(err, "Falha ao cadastrar oficina.") }, { status: 500 });
   }
 }
 
@@ -234,8 +249,8 @@ export async function PATCH(req: NextRequest) {
     if (enabledFeatures !== undefined && (!isRecord(enabledFeatures) || Object.values(enabledFeatures).some((v) => typeof v !== "boolean"))) {
       return NextResponse.json({ success: false, error: "Permissões de módulos inválidas." }, { status: 400 });
     }
-    if (newPassword !== undefined && cleanText(newPassword, 128).length < 8) {
-      return NextResponse.json({ success: false, error: "A nova senha deve ter pelo menos 8 caracteres." }, { status: 400 });
+    if (newPassword !== undefined && cleanText(newPassword, 128).length < 6) {
+      return NextResponse.json({ success: false, error: "A nova senha deve ter pelo menos 6 caracteres." }, { status: 400 });
     }
 
     let computedExpiresAt: string | null = null;

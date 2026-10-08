@@ -490,6 +490,18 @@ export default function MasterDashboard() {
     expiresAt: string;
     workshopUrl: string;
   } | null>(null);
+  const [createdTenantSuccessData, setCreatedTenantSuccessData] = useState<{
+    tenantId: string;
+    workshopName: string;
+    ownerName: string;
+    email: string;
+    phone: string;
+    password: string;
+    plan: string;
+    daysValid: number;
+    expiresAt?: string;
+    workshopUrl: string;
+  } | null>(null);
   const [leadFilterTab, setLeadFilterTab] = useState<"PENDING" | "APPROVED" | "REJECTED" | "ALL">("PENDING");
   const [leadSearchTerm, setLeadSearchTerm] = useState("");
 
@@ -949,13 +961,34 @@ export default function MasterDashboard() {
       const data = await res.json();
       if (data.success) {
         setIsNewModalOpen(false);
+        const savedName = newName;
+        const savedOwner = newOwner;
+        const savedEmail = newEmail;
+        const savedPhone = newPhone;
+        const savedPassword = newPassword;
+        const savedPlan = newPlan;
+        const savedDays = newDays;
+
         setNewName("");
         setNewOwner("");
         setNewEmail("");
         setNewPhone("");
-        setNewPassword("123456");
-        showToast(`Oficina "${newName}" cadastrada com sucesso!`, "success");
+        setNewPassword(generateRandomPassword());
+        showToast(`Oficina "${savedName}" cadastrada com sucesso!`, "success");
         fetchTenants();
+
+        setCreatedTenantSuccessData({
+          tenantId: data.tenantId,
+          workshopName: savedName,
+          ownerName: savedOwner,
+          email: savedEmail,
+          phone: savedPhone,
+          password: savedPassword,
+          plan: savedPlan,
+          daysValid: savedDays,
+          expiresAt: data.expiresAt,
+          workshopUrl: "https://app.giravo.com.br",
+        });
       } else {
         showToast(data.error || "Erro ao criar oficina", "error");
       }
@@ -1390,7 +1423,44 @@ export default function MasterDashboard() {
     }
   };
 
-  // Gerador de mensagem formatada de boas-vindas para WhatsApp
+  // Gerador de mensagem formatada de boas-vindas para WhatsApp (Oficina Criada Manualmente)
+  const getCreatedWorkshopWhatsAppText = (data: {
+    workshopName: string;
+    ownerName: string;
+    email: string;
+    password: string;
+    plan: string;
+    daysValid: number;
+    workshopUrl: string;
+  }) => {
+    return (
+      `🎉 *Olá, ${data.ownerName || "Amigo(a)"}!* Tudo bem?\n\n` +
+      `Sua oficina *${data.workshopName}* já está cadastrada e liberada no sistema *GIRAVO*! 🚀\n\n` +
+      `Aqui estão seus dados de acesso ao sistema:\n` +
+      `🔗 *Link de Acesso:* ${data.workshopUrl}\n` +
+      `👤 *E-mail de Login:* ${data.email}\n` +
+      `🔑 *Senha de Acesso:* ${data.password}\n` +
+      `📦 *Plano Ativo:* ${data.plan}\n` +
+      `⏳ *Validade:* ${data.daysValid} dias\n\n` +
+      `Você já pode acessar ${data.workshopUrl} para emitir Ordens de Serviço, gerenciar Estoque, Financeiro e Vistorias com Fotos.\n\n` +
+      `Se tiver qualquer dúvida, basta responder aqui. Sucesso com o GIRAVO!`
+    );
+  };
+
+  // Higieniza telefone para link do WhatsApp internacional
+  const getCleanPhoneForWhatsApp = (phone: string) => {
+    const digits = (phone || "").replace(/\D/g, "");
+    if (!digits) return "";
+    if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) {
+      return digits;
+    }
+    if (digits.length === 10 || digits.length === 11) {
+      return `55${digits}`;
+    }
+    return digits;
+  };
+
+  // Gerador de mensagem formatada de boas-vindas para WhatsApp (Aprovação de Lead)
   const getWhatsAppMessageText = (params: {
     ownerName: string;
     workshopName: string;
@@ -6249,8 +6319,25 @@ export default function MasterDashboard() {
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
                 <div>
-                  <label style={{ display: "block", fontSize: "11.5px", color: "var(--text-muted)", marginBottom: "3px" }}>Senha Provisória</label>
-                  <input required type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ width: "100%" }} />
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "3px" }}>
+                    <label style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>Senha Provisória (Mín. 6) *</label>
+                    <button
+                      type="button"
+                      onClick={() => setNewPassword(generateRandomPassword())}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--primary)",
+                        fontSize: "11px",
+                        cursor: "pointer",
+                        fontWeight: 700,
+                        padding: 0,
+                      }}
+                    >
+                      Gerar
+                    </button>
+                  </div>
+                  <input required minLength={6} type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{ width: "100%" }} />
                 </div>
                 <div>
                   <label style={{ display: "block", fontSize: "11.5px", color: "var(--text-muted)", marginBottom: "3px" }}>Plano</label>
@@ -7277,6 +7364,251 @@ export default function MasterDashboard() {
                 color: "#FFF",
                 borderRadius: "var(--radius-sm)",
                 fontSize: "12.5px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Concluir e Fechar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* MODAL DE SUCESSO: OFICINA CADASTRADA + ENVIO DE ACESSO NO WHATSAPP   */}
+      {/* ==================================================================== */}
+      {createdTenantSuccessData && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.88)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 130,
+            padding: "20px",
+          }}
+        >
+          <div
+            className="glass-modal"
+            style={{
+              maxWidth: "540px",
+              width: "100%",
+              padding: "28px",
+              borderRadius: "var(--radius-lg)",
+              border: "1px solid rgba(158, 232, 36, 0.4)",
+              boxShadow: "0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(158, 232, 36, 0.2)",
+              textAlign: "center",
+            }}
+          >
+            {/* Ícone de Sucesso */}
+            <div
+              style={{
+                width: "56px",
+                height: "56px",
+                borderRadius: "var(--radius-full)",
+                background: "rgba(158, 232, 36, 0.18)",
+                border: "2px solid var(--primary)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto 16px",
+              }}
+            >
+              <CheckCircle2 size={32} color="var(--primary)" />
+            </div>
+
+            <h3 style={{ fontSize: "20px", fontWeight: 900, color: "#FFF", margin: "0 0 6px" }}>
+              Oficina Cadastrada com Sucesso! 🚀
+            </h3>
+            <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: "0 0 20px" }}>
+              A conta da oficina <strong>{createdTenantSuccessData.workshopName}</strong> foi criada e ativada no sistema.
+            </p>
+
+            {/* Card com os Dados de Acesso */}
+            <div
+              style={{
+                background: "#080B12",
+                border: "1px solid var(--border-strong)",
+                borderRadius: "var(--radius-md)",
+                padding: "16px",
+                textAlign: "left",
+                marginBottom: "16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>Link de Login</span>
+                  <div style={{ color: "#38BDF8", fontSize: "13px", fontWeight: 700 }}>
+                    {createdTenantSuccessData.workshopUrl}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdTenantSuccessData.workshopUrl);
+                    showToast("Link copiado!", "success");
+                  }}
+                  style={{
+                    background: "var(--bg-card-subtle)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "#FFF",
+                    padding: "4px 8px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "11px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Copy size={12} />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>E-mail de Login</span>
+                  <div style={{ color: "#FFF", fontSize: "13px", fontWeight: 700 }}>
+                    {createdTenantSuccessData.email}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdTenantSuccessData.email);
+                    showToast("E-mail copiado!", "success");
+                  }}
+                  style={{
+                    background: "var(--bg-card-subtle)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "#FFF",
+                    padding: "4px 8px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "11px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Copy size={12} />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>Senha de Acesso</span>
+                  <div style={{ color: "var(--primary)", fontSize: "14px", fontWeight: 800, fontFamily: "monospace" }}>
+                    {createdTenantSuccessData.password}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdTenantSuccessData.password);
+                    showToast("Senha copiada!", "success");
+                  }}
+                  style={{
+                    background: "rgba(158, 232, 36, 0.15)",
+                    border: "1px solid rgba(158, 232, 36, 0.35)",
+                    color: "var(--primary)",
+                    padding: "4px 8px",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  <Copy size={12} />
+                </button>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginTop: "2px" }}>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>Plano</span>
+                  <div style={{ color: "#F1F5F9", fontSize: "12px", fontWeight: 700 }}>
+                    {createdTenantSuccessData.plan}
+                  </div>
+                </div>
+                <div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", textTransform: "uppercase" }}>Validade</span>
+                  <div style={{ color: "#34D399", fontSize: "12px", fontWeight: 700 }}>
+                    {createdTenantSuccessData.daysValid} Dias
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Ação Principal: WhatsApp com 1 Clique */}
+            {createdTenantSuccessData.phone ? (
+              <a
+                href={`https://wa.me/${getCleanPhoneForWhatsApp(createdTenantSuccessData.phone)}?text=${encodeURIComponent(
+                  getCreatedWorkshopWhatsAppText(createdTenantSuccessData)
+                )}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  width: "100%",
+                  padding: "13px",
+                  background: "#25D366",
+                  color: "#06080D",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "14px",
+                  fontWeight: 900,
+                  textDecoration: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  marginBottom: "8px",
+                  boxShadow: "0 4px 16px rgba(37, 211, 102, 0.35)",
+                }}
+              >
+                <MessageSquare size={17} />
+                <span>Enviar Dados de Acesso no WhatsApp do Cliente</span>
+              </a>
+            ) : null}
+
+            {/* Botão Secundário: Copiar Texto da Mensagem */}
+            <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(getCreatedWorkshopWhatsAppText(createdTenantSuccessData));
+                  showToast("Mensagem formatada copiada!", "success");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "9px",
+                  background: "var(--bg-card-subtle)",
+                  border: "1px solid var(--border-subtle)",
+                  color: "#FFF",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                }}
+              >
+                <Copy size={13} />
+                <span>Copiar Mensagem do WhatsApp</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setCreatedTenantSuccessData(null)}
+              style={{
+                width: "100%",
+                padding: "10px",
+                background: "transparent",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-muted)",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "12px",
                 fontWeight: 600,
                 cursor: "pointer",
               }}

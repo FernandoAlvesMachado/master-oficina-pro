@@ -79,16 +79,19 @@ export async function POST(req: NextRequest) {
     const leadPhone = cleanText(phone, 50);
     const leadOrigin = cleanText(origin, 100) || "landing_page_trial";
 
-    if (!leadName && !finalWorkshopName) {
+    if (!leadName || !finalWorkshopName) {
       return setCorsHeaders(
         NextResponse.json(
-          { success: false, error: "Nome ou nome da oficina é obrigatório." },
+          { success: false, error: "Nome e nome da oficina são obrigatórios." },
           { status: 400 }
         )
       );
     }
-    if (leadEmail && !isValidEmail(leadEmail)) {
-      return setCorsHeaders(NextResponse.json({ success: false, error: "E-mail inválido." }, { status: 400 }));
+    if (!leadEmail || !isValidEmail(leadEmail)) {
+      return setCorsHeaders(NextResponse.json({ success: false, error: "E-mail válido é obrigatório." }, { status: 400 }));
+    }
+    if (!leadPhone) {
+      return setCorsHeaders(NextResponse.json({ success: false, error: "Telefone/WhatsApp é obrigatório." }, { status: 400 }));
     }
 
     const leadId = `lead-${crypto.randomUUID()}`;
@@ -99,7 +102,7 @@ export async function POST(req: NextRequest) {
     await query(
       `INSERT INTO leads (id, name, workshop_name, email, phone, status, origin, notes, created_at)
        VALUES ($1, $2, $3, $4, $5, 'PENDING_APPROVAL', $6, $7, NOW())`,
-      [leadId, leadName || finalWorkshopName, finalWorkshopName || leadName, leadEmail || null, leadPhone, leadOrigin, finalNotes]
+      [leadId, leadName, finalWorkshopName, leadEmail, leadPhone, leadOrigin, finalNotes]
     );
 
     return setCorsHeaders(
