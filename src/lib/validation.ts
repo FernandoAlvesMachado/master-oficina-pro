@@ -6,6 +6,9 @@ export const LEAD_STATUSES = [
   "APPROVED",
   "CONVERTED",
   "REJECTED",
+  // Fluxo dos leads de material gratuito (NEW -> CONTACTED -> CONVERTED | DISCARDED)
+  "CONTACTED",
+  "DISCARDED",
 ] as const;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

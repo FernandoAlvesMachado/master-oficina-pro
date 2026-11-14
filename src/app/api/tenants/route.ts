@@ -159,6 +159,100 @@ export async function POST(req: NextRequest) {
 
     await ensureTablesOnce();
 
+    // Lead que já possui tenant PENDING (criado pela landing ou por "Converter em teste grátis"):
+    // a aprovação ativa esse tenant e o usuário existente em vez de tentar criar outro
+    // (o que falharia, pois tenants.email é único). Leads sem tenant seguem o fluxo abaixo.
+    if (leadId) {
+      const linked = await query<{ tenant_id: string | null; tenant_status: string | null }>(
+        `SELECT l.tenant_id, t.status AS tenant_status
+         FROM leads l LEFT JOIN tenants t ON t.id = l.tenant_id
+         WHERE l.id = $1`,
+        [leadId]
+      );
+      const pendingTenantId = linked[0]?.tenant_status === "PENDING" ? linked[0].tenant_id : null;
+      if (pendingTenantId) {
+        const emailTaken = await query<{ id: string }>(
+          "SELECT id FROM tenants WHERE LOWER(email) = $1 AND id <> $2 LIMIT 1",
+          [email, pendingTenantId]
+        );
+        if (emailTaken.length > 0) {
+          return NextResponse.json(
+            { success: false, error: "Já existe outra oficina cadastrada com este e-mail. Utilize outro e-mail." },
+            { status: 409 }
+          );
+        }
+
+        const activated = await withTransaction(async (client) => {
+          const tenantUpdate = await client.query(
+            `UPDATE tenants SET
+               name = $2, owner_name = $3, email = $4, phone = $5, plan = $6, max_users = $7,
+               status = $8, trial_until = $9, expires_at = $10, enabled_features = $11,
+               company_settings = COALESCE(company_settings, '{}'::jsonb) || $12::jsonb,
+               updated_at = NOW()
+             WHERE id = $1 AND status = 'PENDING'
+             RETURNING id`,
+            [
+              pendingTenantId,
+              name,
+              ownerName,
+              email,
+              phone,
+              plan,
+              planDefinition.maxUsers,
+              tenantStatus,
+              trialUntil,
+              expiresAt.toISOString(),
+              JSON.stringify(defaultFeatures),
+              JSON.stringify(initialSettings),
+            ]
+          );
+          if (!tenantUpdate.rowCount) return false;
+
+          const owner = await client.query<{ id: string }>(
+            `SELECT id FROM users WHERE tenant_id = $1
+             ORDER BY (role = 'ADMIN') DESC, created_at ASC LIMIT 1 FOR UPDATE`,
+            [pendingTenantId]
+          );
+          if (owner.rowCount) {
+            await client.query(
+              `UPDATE users SET name = $2, email = $3, phone = $4, password_hash = $5, role = 'ADMIN', is_active = true
+               WHERE id = $1`,
+              [owner.rows[0].id, ownerName, email, phone, passwordHash]
+            );
+          } else {
+            await client.query(
+              `INSERT INTO users (id, tenant_id, name, email, password_hash, phone, role, is_active)
+               VALUES ($1, $2, $3, $4, $5, $6, 'ADMIN', true)`,
+              [userId, pendingTenantId, ownerName, email, passwordHash, phone]
+            );
+          }
+
+          await client.query(
+            `INSERT INTO tenant_store (tenant_id, company_settings)
+             VALUES ($1, $2) ON CONFLICT (tenant_id) DO NOTHING`,
+            [pendingTenantId, JSON.stringify(initialSettings)]
+          );
+          await client.query(`UPDATE leads SET status = 'APPROVED' WHERE id = $1`, [leadId]);
+          return true;
+        });
+
+        if (!activated) {
+          return NextResponse.json(
+            { success: false, error: "A oficina deste lead não está mais pendente. Atualize a lista." },
+            { status: 409 }
+          );
+        }
+        return NextResponse.json({
+          success: true,
+          tenantId: pendingTenantId,
+          generatedPassword: password,
+          expiresAt: expiresAt.toISOString(),
+          isDemoMode: false,
+          activatedExistingTenant: true,
+        });
+      }
+    }
+
     const existingTenant = await query<{ id: string }>("SELECT id FROM tenants WHERE LOWER(email) = $1 LIMIT 1", [email]);
     if (existingTenant.length > 0) {
       return NextResponse.json(

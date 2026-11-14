@@ -102,9 +102,14 @@ export function getPool(): Pool {
   return globalThis._giravoPgPool;
 }
 
+// Grava senhas no formato que o sistema do cliente valida (SISTEMA CLIENTE src/lib/authUtils.ts):
+// "scrypt$<salt base64url>$<hash base64url>", salt aleatório de 16 bytes, N=16384, r=8, p=1, 64 bytes.
+// Substitui o HMAC-SHA256 com PASSWORD_SALT, que só funcionava se PASSWORD_SALT fosse igual ao AUTH_SALT
+// do sistema do cliente (e falhava sempre com o salt fixo de fallback).
 export function hashPassword(password: string): string {
-  const salt = process.env.PASSWORD_SALT || "kvns-workshop-platform-secret-salt";
-  return crypto.createHmac("sha256", salt).update(password).digest("hex");
+  const salt = crypto.randomBytes(16);
+  const derived = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+  return `scrypt$${salt.toString("base64url")}$${derived.toString("base64url")}`;
 }
 
 export async function query<T = any>(sqlText: string, params: any[] = []): Promise<T[]> {
@@ -293,6 +298,9 @@ export async function ensureTablesExist(): Promise<{ success: boolean; message: 
         notes TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
+      -- Apenas índices: não altera colunas, defaults nem dados existentes.
+      CREATE INDEX IF NOT EXISTS idx_leads_origin_created ON leads (origin, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_leads_status ON leads (status);
     `);
 
     // 4. Tabela tenant_store

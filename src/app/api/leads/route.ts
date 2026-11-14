@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { query, ensureTablesExist } from "@/lib/db";
+import { query, ensureTablesExist, ensureTablesOnce } from "@/lib/db";
 import { verifyRequestAuth } from "@/lib/auth";
 import crypto from "crypto";
 import { cleanText, isValidEmail, LEAD_STATUSES, publicError } from "@/lib/validation";
+import { isMaterialFlowLead, MATERIAL_LEAD_STATUSES } from "@/lib/leads";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -18,9 +19,13 @@ export async function OPTIONS() {
   return setCorsHeaders(new NextResponse(null, { status: 204 }));
 }
 
+const LEADS_LIST_LIMIT = 500;
+
 /**
  * GET /api/leads
- * Retorna todos os leads cadastrados, ordenando pendentes primeiro
+ * Retorna os leads (teste grátis e materiais gratuitos), mais recentes primeiro,
+ * e os contadores de leads de material por origem nos últimos 7 e 30 dias.
+ * A tabela é lida sozinha (sem JOIN): leads de material têm tenant_id NULL.
  */
 export async function GET(req: NextRequest) {
   if (!(await verifyRequestAuth(req))) {
@@ -30,23 +35,38 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    await ensureTablesExist();
-    const leads = await query(`
-      SELECT id, tenant_id, name, workshop_name, email, phone, status, origin, notes, created_at
-      FROM leads
-      ORDER BY 
-        CASE 
-          WHEN status IN ('PENDING_APPROVAL', 'NEW', 'PENDING') THEN 0
-          WHEN status IN ('APPROVED', 'CONVERTED') THEN 1
-          ELSE 2 
-        END,
-        created_at DESC
-      LIMIT 200
-    `);
-    return setCorsHeaders(NextResponse.json({ success: true, leads }));
+    await ensureTablesOnce();
+    const [leads, materialStats, totals] = await Promise.all([
+      query(
+        `SELECT id, tenant_id, name, workshop_name, email, phone, status, origin, notes, created_at
+         FROM leads
+         ORDER BY created_at DESC NULLS LAST, id DESC
+         LIMIT $1`,
+        [LEADS_LIST_LIMIT]
+      ),
+      query<{ origin: string; last7: number; last30: number }>(
+        `SELECT origin,
+                COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::int AS last7,
+                COUNT(*)::int AS last30
+         FROM leads
+         WHERE origin LIKE 'material\\_%' AND created_at >= NOW() - INTERVAL '30 days'
+         GROUP BY origin
+         ORDER BY origin`
+      ),
+      query<{ total: number }>(`SELECT COUNT(*)::int AS total FROM leads`),
+    ]);
+    return setCorsHeaders(
+      NextResponse.json({
+        success: true,
+        leads,
+        materialStats,
+        total: totals[0]?.total ?? leads.length,
+        limit: LEADS_LIST_LIMIT,
+      })
+    );
   } catch (err: any) {
     console.error("Erro ao buscar leads no PostgreSQL:", err);
-    return setCorsHeaders(NextResponse.json({ success: true, leads: [] }));
+    return setCorsHeaders(NextResponse.json({ success: true, leads: [], materialStats: [] }));
   }
 }
 
@@ -142,6 +162,28 @@ export async function PATCH(req: NextRequest) {
     }
     if (!LEAD_STATUSES.includes(status)) {
       return setCorsHeaders(NextResponse.json({ success: false, error: "Status do lead inválido." }, { status: 400 }));
+    }
+
+    // Leads de material sem conta só aceitam o fluxo NEW -> CONTACTED -> CONVERTED | DISCARDED.
+    // (Para virar teste grátis com conta, use POST /api/leads/convert.)
+    const current = await query<{ tenant_id: string | null; origin: string | null }>(
+      `SELECT tenant_id, origin FROM leads WHERE id = $1`,
+      [leadId]
+    );
+    if (!current.length) {
+      return setCorsHeaders(NextResponse.json({ success: false, error: "Lead não encontrado." }, { status: 404 }));
+    }
+    if (
+      !tenantId &&
+      isMaterialFlowLead(current[0]) &&
+      !(MATERIAL_LEAD_STATUSES as readonly string[]).includes(status)
+    ) {
+      return setCorsHeaders(
+        NextResponse.json(
+          { success: false, error: "Leads de material aceitam apenas os status NEW, CONTACTED, CONVERTED ou DISCARDED." },
+          { status: 400 }
+        )
+      );
     }
 
     if (tenantId) {

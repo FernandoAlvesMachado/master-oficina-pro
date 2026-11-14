@@ -71,6 +71,24 @@ import {
 } from "lucide-react";
 import { GiravoIcon, GiravoLogo, GiravoAppBadge } from "@/components/GiravoBrand";
 import AccessControlPanel from "@/components/AccessControlPanel";
+import LeadDetailModal from "@/components/LeadDetailModal";
+import MaterialLeadsStats from "@/components/MaterialLeadsStats";
+import { LeadStatusBadge, OriginBadge } from "@/components/LeadBadges";
+import {
+  getLeadStatusKey,
+  isMaterialFlowLead,
+  leadWhatsAppMessage,
+  matchesOriginFilter,
+  onlyDigits,
+  ORIGIN_FILTERS,
+  STATUS_FILTERS,
+  STATUS_LABELS,
+  whatsappLink,
+  type LeadStatusKey,
+  type MaterialLeadStat,
+  type MaterialLeadStatus,
+  type OriginFilter,
+} from "@/lib/leads";
 import { normalizePlan, PLAN_CATALOG, type PlanKey } from "@/lib/plans";
 
 interface Tenant {
@@ -104,14 +122,14 @@ interface Tenant {
 
 interface Lead {
   id: string;
-  tenant_id?: string;
+  tenant_id?: string | null; // NULL nos leads de material gratuito ainda não convertidos
   name: string;
   workshop_name: string;
   email: string;
   phone: string;
   status: string;
   origin: string;
-  notes?: string;
+  notes?: string | null;
   created_at: string;
 }
 
@@ -502,8 +520,13 @@ export default function MasterDashboard() {
     expiresAt?: string;
     workshopUrl: string;
   } | null>(null);
-  const [leadFilterTab, setLeadFilterTab] = useState<"PENDING" | "APPROVED" | "REJECTED" | "ALL">("PENDING");
+  const [leadOriginFilter, setLeadOriginFilter] = useState<OriginFilter>("ALL");
+  const [leadStatusFilter, setLeadStatusFilter] = useState<"ALL" | LeadStatusKey>("ALL");
   const [leadSearchTerm, setLeadSearchTerm] = useState("");
+  const [materialLeadStats, setMaterialLeadStats] = useState<MaterialLeadStat[]>([]);
+  const [leadsTotalInDb, setLeadsTotalInDb] = useState<number | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [leadActionBusy, setLeadActionBusy] = useState(false);
 
   // Toast notification
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
@@ -634,6 +657,8 @@ export default function MasterDashboard() {
       const data = await res.json();
       if (data.success) {
         setLeads(data.leads || []);
+        setMaterialLeadStats(Array.isArray(data.materialStats) ? data.materialStats : []);
+        setLeadsTotalInDb(typeof data.total === "number" ? data.total : null);
       }
     } catch (err) {
       console.warn("Error fetching leads:", err);
@@ -1275,12 +1300,19 @@ export default function MasterDashboard() {
     setActiveNav("chat");
   };
 
-  // Gerador de senhas seguras e fáceis para aprovação de teste
+  // Senha provisória forte e fácil de ditar: mesmo formato do sistema do cliente ("Gv-XXXX-XXXX-XXXX",
+  // 12 símbolos de um alfabeto de 31 sem ambíguos 0/O, 1/I/L, ~59 bits), com gerador criptográfico.
   const generateRandomPassword = () => {
-    const prefixes = ["GIRAVO", "GIRO", "AUTO", "TURBO", "OFICINA"];
-    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-    const num = Math.floor(1000 + Math.random() * 9000);
-    return `${prefix}-${num}`;
+    const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    const chars: string[] = [];
+    const buf = new Uint8Array(32);
+    while (chars.length < 12) {
+      crypto.getRandomValues(buf);
+      for (const byte of buf) {
+        if (byte < 248 && chars.length < 12) chars.push(alphabet[byte % alphabet.length]); // 248 = 31*8: sem viés
+      }
+    }
+    return `Gv-${chars.slice(0, 4).join("")}-${chars.slice(4, 8).join("")}-${chars.slice(8, 12).join("")}`;
   };
 
   // Iniciar aprovação de lead (abre modal dedicado de aprovação com senha gerada)
@@ -1420,6 +1452,64 @@ export default function MasterDashboard() {
       }
     } catch (err: any) {
       showToast("Erro: " + err.message, "error");
+    }
+  };
+
+  // Leads de material gratuito: NEW -> CONTACTED -> CONVERTED | DISCARDED (persistido no banco)
+  const handleChangeMaterialLeadStatus = async (lead: Lead, status: MaterialLeadStatus) => {
+    setLeadActionBusy(true);
+    try {
+      const res = await fetch("/api/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, status }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, status } : l)));
+        showToast(`Lead de ${lead.name || lead.email} marcado como "${STATUS_LABELS[status]}".`, "success");
+      } else {
+        showToast(data.error || "Não foi possível alterar o status do lead.", "error");
+      }
+    } catch (err: any) {
+      showToast("Erro: " + err.message, "error");
+    } finally {
+      setLeadActionBusy(false);
+    }
+  };
+
+  // Converte um lead de material em solicitação de teste grátis (cria tenant PENDING + usuário inativo)
+  const handleConvertMaterialLead = async (lead: Lead) => {
+    if (
+      !confirm(
+        `Converter "${lead.workshop_name || lead.name}" em teste grátis?\n\n` +
+          `Será criada uma oficina pendente e um usuário inativo com o e-mail ${lead.email}. ` +
+          `Depois disso o lead entra no fluxo normal de aprovação do teste.`
+      )
+    )
+      return;
+    setLeadActionBusy(true);
+    try {
+      const res = await fetch("/api/leads/convert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setLeads((prev) =>
+          prev.map((l) => (l.id === lead.id ? { ...l, status: "PENDING", tenant_id: data.tenantId } : l))
+        );
+        showToast("Lead convertido em teste grátis. Agora ele aguarda sua aprovação.", "success");
+        fetchTenants();
+        fetchLeads();
+      } else {
+        showToast(data.error || "Não foi possível converter o lead.", "error");
+      }
+    } catch (err: any) {
+      showToast("Erro: " + err.message, "error");
+    } finally {
+      setLeadActionBusy(false);
     }
   };
 
@@ -1605,35 +1695,211 @@ export default function MasterDashboard() {
     return thread?.status === "ARCHIVED" && !hasUnread;
   }).length;
 
-  // Contagens e Filtros para Solicitações de Teste de 14 Dias (Leads)
-  const isPendingStatus = (st?: string) =>
-    !st || st === "PENDING_APPROVAL" || st === "NEW" || st === "PENDING";
-  const isApprovedStatus = (st?: string) =>
-    st === "APPROVED" || st === "CONVERTED";
-  const isRejectedStatus = (st?: string) =>
-    st === "REJECTED";
+  // Contagens e Filtros de Leads (teste grátis + materiais gratuitos).
+  // As contagens de "teste" ignoram leads de material sem oficina, que têm fluxo próprio.
+  const leadStatusKeys = new Map(leads.map((l) => [l.id, getLeadStatusKey(l)]));
+  const statusKeyOf = (l: Lead) => leadStatusKeys.get(l.id) || getLeadStatusKey(l);
 
-  const pendingLeadsCount = leads.filter((l) => isPendingStatus(l.status)).length;
-  const approvedLeadsCount = leads.filter((l) => isApprovedStatus(l.status)).length;
-  const rejectedLeadsCount = leads.filter((l) => isRejectedStatus(l.status)).length;
+  const pendingLeadsCount = leads.filter((l) => statusKeyOf(l) === "PENDING").length;
+  const approvedLeadsCount = leads.filter((l) => statusKeyOf(l) === "APPROVED").length;
+  const rejectedLeadsCount = leads.filter((l) => statusKeyOf(l) === "REJECTED").length;
+  const newMaterialLeadsCount = leads.filter((l) => statusKeyOf(l) === "NEW").length;
+  // Badge da navegação: testes aguardando aprovação + leads de material ainda não contatados
+  const leadsToHandleCount = pendingLeadsCount + newMaterialLeadsCount;
 
-  const filteredLeads = leads.filter((l) => {
-    // 1. Filtro por status
-    if (leadFilterTab === "PENDING" && !isPendingStatus(l.status)) return false;
-    if (leadFilterTab === "APPROVED" && !isApprovedStatus(l.status)) return false;
-    if (leadFilterTab === "REJECTED" && !isRejectedStatus(l.status)) return false;
-
-    // 2. Filtro por busca de texto
-    if (!leadSearchTerm.trim()) return true;
-    const q = leadSearchTerm.toLowerCase();
-    return (
-      (l.name && l.name.toLowerCase().includes(q)) ||
-      (l.workshop_name && l.workshop_name.toLowerCase().includes(q)) ||
-      (l.email && l.email.toLowerCase().includes(q)) ||
-      (l.phone && l.phone.includes(q)) ||
-      (l.notes && l.notes.toLowerCase().includes(q))
+  const leadSearchQuery = leadSearchTerm.trim().toLowerCase();
+  const leadSearchDigits = onlyDigits(leadSearchTerm);
+  const matchesLeadSearch = (l: Lead) => {
+    if (!leadSearchQuery) return true;
+    return Boolean(
+      (l.name && l.name.toLowerCase().includes(leadSearchQuery)) ||
+        (l.workshop_name && l.workshop_name.toLowerCase().includes(leadSearchQuery)) ||
+        (l.email && l.email.toLowerCase().includes(leadSearchQuery)) ||
+        (l.phone && l.phone.toLowerCase().includes(leadSearchQuery)) ||
+        // "67999" encontra "(67) 99999-0000"
+        (leadSearchDigits.length >= 3 && onlyDigits(l.phone).includes(leadSearchDigits))
     );
+  };
+
+  // Contagem por origem respeita status + busca; contagem por status respeita origem + busca.
+  const leadsMatchingSearch = leads.filter(matchesLeadSearch);
+  const originFilterCounts = Object.fromEntries(
+    ORIGIN_FILTERS.map((f) => [
+      f.id,
+      leadsMatchingSearch.filter(
+        (l) => matchesOriginFilter(l, f.id) && (leadStatusFilter === "ALL" || statusKeyOf(l) === leadStatusFilter)
+      ).length,
+    ])
+  ) as Record<OriginFilter, number>;
+  const leadsForStatusCounts = leadsMatchingSearch.filter((l) => matchesOriginFilter(l, leadOriginFilter));
+  const statusFilterCount = (id: "ALL" | LeadStatusKey) =>
+    id === "ALL" ? leadsForStatusCounts.length : leadsForStatusCounts.filter((l) => statusKeyOf(l) === id).length;
+
+  // A API já devolve em ordem de created_at DESC; reordena aqui para manter a ordem após atualizações locais.
+  const filteredLeads = leadsForStatusCounts
+    .filter((l) => leadStatusFilter === "ALL" || statusKeyOf(l) === leadStatusFilter)
+    .sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0));
+
+  const selectedLead = selectedLeadId ? leads.find((l) => l.id === selectedLeadId) || null : null;
+
+  const leadActionStyle = (color: string, solid = false): React.CSSProperties => ({
+    background: solid ? color : `${color}1F`,
+    color: solid ? "#06080D" : color,
+    border: `1px solid ${solid ? color : `${color}59`}`,
+    padding: "7px 12px",
+    borderRadius: "var(--radius-sm)",
+    fontSize: "11.5px",
+    fontWeight: solid ? 900 : 700,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "5px",
+    textDecoration: "none",
+    whiteSpace: "nowrap",
   });
+
+  // Status: leads de material sem oficina trocam de status direto na lista; os demais mostram o selo.
+  const renderLeadStatusControl = (l: Lead) => {
+    if (!isMaterialFlowLead(l)) return <LeadStatusBadge lead={l} />;
+    const key = statusKeyOf(l);
+    return (
+      <select
+        value={key === "OTHER" ? l.status : key}
+        disabled={leadActionBusy}
+        onChange={(e) => handleChangeMaterialLeadStatus(l, e.target.value as MaterialLeadStatus)}
+        aria-label="Alterar status do lead"
+        style={{ padding: "6px 10px", fontSize: "12px", fontWeight: 700, borderRadius: "var(--radius-sm)", minWidth: "140px" }}
+      >
+        {key === "OTHER" && (
+          <option value={l.status} disabled>
+            {l.status}
+          </option>
+        )}
+        {(["NEW", "CONTACTED", "CONVERTED", "DISCARDED"] as MaterialLeadStatus[]).map((st) => (
+          <option key={st} value={st}>
+            {STATUS_LABELS[st]}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
+  // Ações por tipo de lead. Ações que dependem de oficina (aprovar, gerar senha, ver oficina, chat)
+  // nunca aparecem para lead de material sem tenant_id.
+  const renderLeadActions = (l: Lead) => {
+    const statusKey = statusKeyOf(l);
+    const details = (
+      <button type="button" onClick={() => setSelectedLeadId(l.id)} title="Ver detalhes do lead" style={leadActionStyle("#CBD5E1")}>
+        <Eye size={12} />
+        <span>Detalhes</span>
+      </button>
+    );
+    let actions: React.ReactNode = null;
+
+    if (isMaterialFlowLead(l)) {
+      actions = (
+        <button
+          type="button"
+          disabled={leadActionBusy}
+          onClick={() => handleConvertMaterialLead(l)}
+          title="Criar oficina pendente e usuário inativo para este lead (fluxo de teste grátis)"
+          style={leadActionStyle("#9EE824")}
+        >
+          <Sparkles size={12} />
+          <span>Converter em teste</span>
+        </button>
+      );
+    } else if (statusKey === "PENDING") {
+      actions = (
+        <>
+          <button
+            type="button"
+            onClick={() => handleStartApproval(l)}
+            title="Aprovar esta solicitação, definir senha e liberar a conta da oficina"
+            style={{ ...leadActionStyle("#9EE824", true), boxShadow: "0 2px 10px rgba(158, 232, 36, 0.3)" }}
+          >
+            <Sparkles size={13} strokeWidth={2.5} />
+            <span>Aprovar & Gerar Acesso</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleRejectLead(l.id, l.name || l.workshop_name)}
+            title="Recusar esta solicitação (não libera acesso)"
+            style={leadActionStyle("#F87171")}
+          >
+            <Ban size={12} />
+            <span>Recusar</span>
+          </button>
+        </>
+      );
+    } else if (statusKey === "APPROVED") {
+      actions = (
+        <>
+          {l.phone && whatsappLink(l.phone) && (
+            <a
+              href={whatsappLink(
+                l.phone,
+                getWhatsAppMessageText({
+                  ownerName: l.name || "Cliente",
+                  workshopName: l.workshop_name || "sua Oficina",
+                  email: l.email || "",
+                  password: "(senha já gerada)",
+                  url:
+                    typeof window !== "undefined" && window.location.origin.includes("3005")
+                      ? window.location.origin.replace("3005", "3000")
+                      : "https://app.giravo.com.br",
+                  days: 14,
+                })
+              )}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Enviar mensagem pelo WhatsApp"
+              style={leadActionStyle("#25D366")}
+            >
+              <MessageSquare size={12} />
+              <span>WhatsApp</span>
+            </a>
+          )}
+          {l.tenant_id && (
+            <button
+              type="button"
+              onClick={() => handleViewOperational(l.tenant_id!)}
+              title="Acessar espelho operacional desta oficina"
+              style={leadActionStyle("#E2E8F0")}
+            >
+              <Monitor size={12} />
+              <span>Ver Oficina</span>
+            </button>
+          )}
+          {l.tenant_id && (
+            <button type="button" onClick={() => handleOpenChat(l.tenant_id!)} title="Abrir chat com a oficina" style={leadActionStyle("#9EE824")}>
+              <MessageSquare size={12} />
+              <span>Chat</span>
+            </button>
+          )}
+        </>
+      );
+    } else if (statusKey === "REJECTED") {
+      actions = (
+        <>
+          <button type="button" onClick={() => handleReopenLead(l.id)} title="Reabrir esta solicitação para aprovação" style={leadActionStyle("#38BDF8")}>
+            <RefreshCw size={12} />
+            <span>Reabrir</span>
+          </button>
+          <button type="button" onClick={() => handleDeleteLead(l.id)} title="Excluir lead permanentemente" style={leadActionStyle("#F87171")}>
+            <Trash2 size={12} />
+          </button>
+        </>
+      );
+    }
+
+    return (
+      <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+        {actions}
+        {details}
+      </div>
+    );
+  };
 
   // Lista de Oficinas para o Chat Filtrada e Ordenada (Estilo WhatsApp + Inbox Zero)
   const sortedChatTenants = [...tenants]
@@ -2163,10 +2429,10 @@ export default function MasterDashboard() {
             }}
           >
             <Sparkles size={18} />
-            {!sidebarCollapsed && <span>Solicitações de Teste</span>}
+            {!sidebarCollapsed && <span>Leads & Testes</span>}
             {!sidebarCollapsed && (
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px" }}>
-                {pendingLeadsCount > 0 ? (
+                {leadsToHandleCount > 0 ? (
                   <span
                     style={{
                       background: "rgba(158, 232, 36, 0.2)",
@@ -2182,7 +2448,7 @@ export default function MasterDashboard() {
                     }}
                   >
                     <span className="pulse-dot" style={{ background: "var(--primary)", width: "5px", height: "5px" }} />
-                    {pendingLeadsCount} {pendingLeadsCount === 1 ? "pendente" : "pendentes"}
+                    {leadsToHandleCount} {leadsToHandleCount === 1 ? "pendente" : "pendentes"}
                   </span>
                 ) : leads.length > 0 ? (
                   <span
@@ -2486,6 +2752,17 @@ export default function MasterDashboard() {
         </header>
 
         {/* ================================================================== */}
+        {activeNav === "home" && (
+          <MaterialLeadsStats
+            stats={materialLeadStats}
+            onOpen={(filter) => {
+              setLeadOriginFilter(filter);
+              setLeadStatusFilter("ALL");
+              setLeadSearchTerm("");
+              setActiveNav("leads");
+            }}
+          />
+        )}
         {activeNav === "home" && (
           <BillingHome
             data={billingData}
@@ -4965,12 +5242,12 @@ export default function MasterDashboard() {
         {/* ================================================================== */}
         {activeNav === "leads" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-            {/* Header & Explicação do Novo Fluxo */}
+            {/* Header */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px" }}>
               <div>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
                   <h3 style={{ fontSize: "18px", color: "#FFF", margin: 0, fontWeight: 800 }}>
-                    Solicitações de Teste de 14 Dias
+                    Leads: Testes Grátis & Materiais
                   </h3>
                   {pendingLeadsCount > 0 && (
                     <span
@@ -4991,19 +5268,32 @@ export default function MasterDashboard() {
                       {pendingLeadsCount} {pendingLeadsCount === 1 ? "oficina aguarda aprovação" : "oficinas aguardam aprovação"}
                     </span>
                   )}
+                  {newMaterialLeadsCount > 0 && (
+                    <span
+                      style={{
+                        background: "rgba(56, 189, 248, 0.15)",
+                        color: "#38BDF8",
+                        border: "1px solid rgba(56, 189, 248, 0.35)",
+                        padding: "3px 10px",
+                        borderRadius: "var(--radius-full)",
+                        fontSize: "11px",
+                        fontWeight: 800,
+                      }}
+                    >
+                      {newMaterialLeadsCount} {newMaterialLeadsCount === 1 ? "lead de material novo" : "leads de material novos"}
+                    </span>
+                  )}
                 </div>
                 <p style={{ color: "var(--text-muted)", fontSize: "13px", marginTop: "4px" }}>
-                  Oficinas que solicitaram teste de 14 dias pela landing page sem senha prévia.
-                  Apenas oficinas aprovadas pelo Master recebem senha de acesso e são criadas no sistema.
+                  Pedidos de teste grátis (aprovados pelo Master) e contatos captados pelos materiais gratuitos da landing page.
                 </p>
               </div>
 
-              {/* Botão de atualização rápida */}
               <button
                 type="button"
                 onClick={() => {
                   fetchLeads();
-                  showToast("Lista de solicitações sincronizada!", "info");
+                  showToast("Lista de leads sincronizada!", "info");
                 }}
                 style={{
                   background: "var(--bg-card-subtle)",
@@ -5024,160 +5314,78 @@ export default function MasterDashboard() {
               </button>
             </div>
 
-            {/* KPI Cards / Filtros Rápidos de Status */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-                gap: "12px",
-              }}
-            >
-              {/* Card 1: Aguardando Aprovação */}
-              <div
-                className="glass-panel"
-                onClick={() => setLeadFilterTab("PENDING")}
-                style={{
-                  padding: "16px 18px",
-                  cursor: "pointer",
-                  borderRadius: "var(--radius-md)",
-                  border: leadFilterTab === "PENDING" ? "1px solid var(--primary)" : "1px solid var(--border-subtle)",
-                  background: leadFilterTab === "PENDING" ? "rgba(158, 232, 36, 0.08)" : "var(--bg-card)",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "11px", color: "var(--primary)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    Aguardando Aprovação
-                  </span>
-                  <Clock size={16} color="var(--primary)" />
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
-                  <h3 style={{ fontSize: "28px", fontWeight: 900, color: "#FFF", margin: 0 }}>
-                    {pendingLeadsCount}
-                  </h3>
-                  <span style={{ fontSize: "11.5px", color: pendingLeadsCount > 0 ? "var(--primary)" : "var(--text-dim)" }}>
-                    {pendingLeadsCount > 0 ? "Ação pendente" : "Tudo em dia"}
-                  </span>
-                </div>
-              </div>
-
-              {/* Card 2: Aprovadas & Liberadas */}
-              <div
-                className="glass-panel"
-                onClick={() => setLeadFilterTab("APPROVED")}
-                style={{
-                  padding: "16px 18px",
-                  cursor: "pointer",
-                  borderRadius: "var(--radius-md)",
-                  border: leadFilterTab === "APPROVED" ? "1px solid var(--emerald)" : "1px solid var(--border-subtle)",
-                  background: leadFilterTab === "APPROVED" ? "rgba(16, 185, 129, 0.08)" : "var(--bg-card)",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "11px", color: "var(--emerald)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    Aprovadas & Liberadas
-                  </span>
-                  <CheckCircle2 size={16} color="var(--emerald)" />
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
-                  <h3 style={{ fontSize: "28px", fontWeight: 900, color: "var(--emerald)", margin: 0 }}>
-                    {approvedLeadsCount}
-                  </h3>
-                  <span style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>Contas ativas</span>
-                </div>
-              </div>
-
-              {/* Card 3: Recusadas */}
-              <div
-                className="glass-panel"
-                onClick={() => setLeadFilterTab("REJECTED")}
-                style={{
-                  padding: "16px 18px",
-                  cursor: "pointer",
-                  borderRadius: "var(--radius-md)",
-                  border: leadFilterTab === "REJECTED" ? "1px solid var(--rose)" : "1px solid var(--border-subtle)",
-                  background: leadFilterTab === "REJECTED" ? "rgba(239, 68, 68, 0.08)" : "var(--bg-card)",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "11px", color: "var(--rose)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    Recusadas / Inativas
-                  </span>
-                  <Ban size={16} color="var(--rose)" />
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
-                  <h3 style={{ fontSize: "28px", fontWeight: 900, color: "#CBD5E1", margin: 0 }}>
-                    {rejectedLeadsCount}
-                  </h3>
-                  <span style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>Não liberadas</span>
-                </div>
-              </div>
-
-              {/* Card 4: Total de Solicitações */}
-              <div
-                className="glass-panel"
-                onClick={() => setLeadFilterTab("ALL")}
-                style={{
-                  padding: "16px 18px",
-                  cursor: "pointer",
-                  borderRadius: "var(--radius-md)",
-                  border: leadFilterTab === "ALL" ? "1px solid rgba(255, 255, 255, 0.4)" : "1px solid var(--border-subtle)",
-                  background: leadFilterTab === "ALL" ? "rgba(255, 255, 255, 0.05)" : "var(--bg-card)",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    Todas as Solicitações
-                  </span>
-                  <Users size={16} color="var(--text-muted)" />
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
-                  <h3 style={{ fontSize: "28px", fontWeight: 900, color: "#FFF", margin: 0 }}>
-                    {leads.length}
-                  </h3>
-                  <span style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>Recebidas</span>
-                </div>
-              </div>
+            {/* KPI Cards / atalhos de filtro */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "12px" }}>
+              {[
+                { status: "PENDING" as const, origin: "ALL" as OriginFilter, label: "Aguardando Aprovação", value: pendingLeadsCount, hint: pendingLeadsCount > 0 ? "Ação pendente" : "Tudo em dia", color: "var(--primary)", bg: "rgba(158, 232, 36, 0.08)", icon: <Clock size={16} color="var(--primary)" /> },
+                { status: "NEW" as const, origin: "ALL" as OriginFilter, label: "Materiais: novos", value: newMaterialLeadsCount, hint: "Ainda não contatados", color: "#38BDF8", bg: "rgba(56, 189, 248, 0.08)", icon: <FileText size={16} color="#38BDF8" /> },
+                { status: "APPROVED" as const, origin: "ALL" as OriginFilter, label: "Testes Aprovados", value: approvedLeadsCount, hint: "Contas criadas", color: "var(--emerald)", bg: "rgba(16, 185, 129, 0.08)", icon: <CheckCircle2 size={16} color="var(--emerald)" /> },
+                { status: "REJECTED" as const, origin: "ALL" as OriginFilter, label: "Testes Recusados", value: rejectedLeadsCount, hint: "Não liberados", color: "var(--rose)", bg: "rgba(239, 68, 68, 0.08)", icon: <Ban size={16} color="var(--rose)" /> },
+                { status: "ALL" as const, origin: "ALL" as OriginFilter, label: "Todos os Leads", value: leads.length, hint: "Recebidos", color: "rgba(255, 255, 255, 0.6)", bg: "rgba(255, 255, 255, 0.05)", icon: <Users size={16} color="var(--text-muted)" /> },
+              ].map((card) => {
+                const active = leadStatusFilter === card.status && leadOriginFilter === card.origin;
+                return (
+                  <div
+                    key={card.status}
+                    className="glass-panel"
+                    onClick={() => {
+                      setLeadStatusFilter(card.status);
+                      setLeadOriginFilter(card.origin);
+                    }}
+                    style={{
+                      padding: "16px 18px",
+                      cursor: "pointer",
+                      borderRadius: "var(--radius-md)",
+                      border: active ? `1px solid ${card.color}` : "1px solid var(--border-subtle)",
+                      background: active ? card.bg : "var(--bg-card)",
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: "11px", color: card.color, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                        {card.label}
+                      </span>
+                      {card.icon}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "6px" }}>
+                      <h3 style={{ fontSize: "28px", fontWeight: 900, color: "#FFF", margin: 0 }}>{card.value}</h3>
+                      <span style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>{card.hint}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
-            {/* Barra de Filtros e Busca */}
+            {/* Barra de Filtros (origem + status) e Busca */}
             <div
               className="glass-panel"
               style={{
                 padding: "14px 18px",
                 display: "flex",
-                flexWrap: "wrap",
-                gap: "14px",
-                alignItems: "center",
-                justifyContent: "space-between",
+                flexDirection: "column",
+                gap: "12px",
                 borderRadius: "var(--radius-md)",
               }}
             >
-              {/* Abas em formato Pill */}
-              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                {[
-                  { id: "PENDING", label: "Aguardando Aprovação", count: pendingLeadsCount, color: "var(--primary)" },
-                  { id: "APPROVED", label: "Aprovadas", count: approvedLeadsCount, color: "var(--emerald)" },
-                  { id: "REJECTED", label: "Recusadas", count: rejectedLeadsCount, color: "var(--rose)" },
-                  { id: "ALL", label: "Todas", count: leads.length, color: "#FFF" },
-                ].map((tab) => {
-                  const isActive = leadFilterTab === tab.id;
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: "11px", color: "var(--text-dim)", fontWeight: 700, textTransform: "uppercase", marginRight: "4px" }}>
+                  Origem
+                </span>
+                {ORIGIN_FILTERS.map((f) => {
+                  const isActive = leadOriginFilter === f.id;
                   return (
                     <button
-                      key={tab.id}
+                      key={f.id}
                       type="button"
-                      onClick={() => setLeadFilterTab(tab.id as any)}
+                      onClick={() => setLeadOriginFilter(f.id)}
                       style={{
                         padding: "7px 14px",
                         fontSize: "12px",
                         fontWeight: isActive ? 800 : 600,
                         borderRadius: "var(--radius-full)",
-                        background: isActive ? tab.color : "var(--bg-card-subtle)",
+                        background: isActive ? "var(--primary)" : "var(--bg-card-subtle)",
                         color: isActive ? "#06080D" : "var(--text-muted)",
-                        border: isActive ? `1px solid ${tab.color}` : "1px solid var(--border-subtle)",
+                        border: isActive ? "1px solid var(--primary)" : "1px solid var(--border-subtle)",
                         cursor: "pointer",
                         display: "flex",
                         alignItems: "center",
@@ -5185,7 +5393,7 @@ export default function MasterDashboard() {
                         transition: "all 0.15s ease",
                       }}
                     >
-                      <span>{tab.label}</span>
+                      <span>{f.label}</span>
                       <span
                         style={{
                           background: isActive ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.08)",
@@ -5194,55 +5402,91 @@ export default function MasterDashboard() {
                           fontSize: "10.5px",
                         }}
                       >
-                        {tab.count}
+                        {originFilterCounts[f.id]}
                       </span>
                     </button>
                   );
                 })}
               </div>
 
-              {/* Caixa de Pesquisa */}
-              <div style={{ position: "relative", minWidth: "260px", flex: 1, maxWidth: "400px" }}>
-                <Search
-                  size={15}
-                  color="var(--text-dim)"
-                  style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)" }}
-                />
-                <input
-                  type="text"
-                  placeholder="Buscar por oficina, nome, email ou telefone..."
-                  value={leadSearchTerm}
-                  onChange={(e) => setLeadSearchTerm(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "8px 12px 8px 36px",
-                    fontSize: "12.5px",
-                    borderRadius: "var(--radius-sm)",
-                  }}
-                />
-                {leadSearchTerm && (
+              <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                <select
+                  value={leadStatusFilter}
+                  onChange={(e) => setLeadStatusFilter(e.target.value as "ALL" | LeadStatusKey)}
+                  aria-label="Filtrar por status"
+                  style={{ padding: "8px 12px", fontSize: "12.5px", borderRadius: "var(--radius-sm)", minWidth: "230px" }}
+                >
+                  {STATUS_FILTERS.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label} ({statusFilterCount(f.id)})
+                    </option>
+                  ))}
+                </select>
+
+                <div style={{ position: "relative", minWidth: "240px", flex: 1, maxWidth: "420px" }}>
+                  <Search
+                    size={15}
+                    color="var(--text-dim)"
+                    style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)" }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Buscar por nome, oficina, e-mail ou telefone..."
+                    value={leadSearchTerm}
+                    onChange={(e) => setLeadSearchTerm(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px 8px 36px",
+                      fontSize: "12.5px",
+                      borderRadius: "var(--radius-sm)",
+                    }}
+                  />
+                  {leadSearchTerm && (
+                    <button
+                      type="button"
+                      onClick={() => setLeadSearchTerm("")}
+                      aria-label="Limpar busca"
+                      style={{
+                        position: "absolute",
+                        right: "10px",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        color: "var(--text-dim)",
+                        background: "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        padding: "2px",
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {(leadOriginFilter !== "ALL" || leadStatusFilter !== "ALL" || leadSearchTerm) && (
                   <button
                     type="button"
-                    onClick={() => setLeadSearchTerm("")}
-                    style={{
-                      position: "absolute",
-                      right: "10px",
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                      color: "var(--text-dim)",
-                      background: "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      padding: "2px",
+                    onClick={() => {
+                      setLeadOriginFilter("ALL");
+                      setLeadStatusFilter("ALL");
+                      setLeadSearchTerm("");
                     }}
+                    style={{ background: "transparent", border: "none", color: "var(--text-muted)", fontSize: "12px", cursor: "pointer", textDecoration: "underline" }}
                   >
-                    <X size={14} />
+                    Limpar filtros
                   </button>
                 )}
               </div>
+
+              {leadsTotalInDb !== null && leadsTotalInDb > leads.length && (
+                <div style={{ fontSize: "11.5px", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Info size={12} />
+                  Exibindo os {leads.length} leads mais recentes de {leadsTotalInDb} no banco.
+                </div>
+              )}
             </div>
 
-            {/* Tabela de Solicitações Desktop */}
+            {/* Tabela de Leads Desktop */}
             <div className="glass-panel desktop-only" style={{ overflowX: "auto", borderRadius: "var(--radius-md)" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
                 <thead>
@@ -5256,10 +5500,10 @@ export default function MasterDashboard() {
                       letterSpacing: "0.5px",
                     }}
                   >
-                    <th style={{ padding: "14px 18px" }}>Oficina & Responsável</th>
-                    <th style={{ padding: "14px 18px" }}>Status da Solicitação</th>
-                    <th style={{ padding: "14px 18px" }}>Contatos & WhatsApp</th>
+                    <th style={{ padding: "14px 18px" }}>Lead</th>
                     <th style={{ padding: "14px 18px" }}>Origem & Data</th>
+                    <th style={{ padding: "14px 18px" }}>Status</th>
+                    <th style={{ padding: "14px 18px" }}>Contatos & WhatsApp</th>
                     <th style={{ padding: "14px 18px" }}>Observações</th>
                     <th style={{ padding: "14px 18px", textAlign: "right" }}>Ações do Master</th>
                   </tr>
@@ -5282,37 +5526,43 @@ export default function MasterDashboard() {
                           >
                             <Sparkles size={22} color="var(--primary)" />
                           </div>
-                          <strong style={{ color: "#FFF", fontSize: "14px" }}>
-                            Nenhuma solicitação encontrada
-                          </strong>
+                          <strong style={{ color: "#FFF", fontSize: "14px" }}>Nenhum lead encontrado</strong>
                           <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>
                             {leadSearchTerm
                               ? `Não há resultados para "${leadSearchTerm}". Tente outros termos.`
-                              : leadFilterTab === "PENDING"
-                              ? "Nenhuma oficina aguardando aprovação no momento. Quando alguém se cadastrar na landing page, aparecerá aqui instantaneamente!"
-                              : "Nenhuma solicitação nesta categoria."}
+                              : "Nenhum lead nesta combinação de origem e status."}
                           </p>
                         </div>
                       </td>
                     </tr>
                   ) : (
                     filteredLeads.map((l) => {
-                      const isPending = isPendingStatus(l.status);
-                      const isApproved = isApprovedStatus(l.status);
-                      const isRejected = isRejectedStatus(l.status);
+                      const statusKey = statusKeyOf(l);
+                      const isPending = statusKey === "PENDING";
+                      const isApproved = statusKey === "APPROVED";
+                      const isNewMaterial = statusKey === "NEW";
 
                       return (
                         <tr
                           key={l.id}
                           style={{
                             borderBottom: "1px solid var(--border-subtle)",
-                            background: isPending ? "rgba(158, 232, 36, 0.02)" : "transparent",
+                            background: isPending
+                              ? "rgba(158, 232, 36, 0.02)"
+                              : isNewMaterial
+                              ? "rgba(56, 189, 248, 0.03)"
+                              : "transparent",
                             transition: "background 0.1s ease",
                           }}
                         >
-                          {/* Oficina & Responsável */}
+                          {/* Lead */}
                           <td style={{ padding: "16px 18px" }}>
-                            <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedLeadId(l.id)}
+                              title="Ver detalhes do lead"
+                              style={{ display: "flex", alignItems: "flex-start", gap: "10px", background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", color: "inherit" }}
+                            >
                               <div
                                 style={{
                                   width: "36px",
@@ -5325,90 +5575,43 @@ export default function MasterDashboard() {
                                   flexShrink: 0,
                                 }}
                               >
-                                <Building2
-                                  size={18}
-                                  color={isPending ? "var(--primary)" : isApproved ? "var(--emerald)" : "var(--text-muted)"}
-                                />
+                                {isMaterialFlowLead(l) ? (
+                                  <FileText size={18} color="#38BDF8" />
+                                ) : (
+                                  <Building2 size={18} color={isPending ? "var(--primary)" : isApproved ? "var(--emerald)" : "var(--text-muted)"} />
+                                )}
                               </div>
                               <div>
                                 <strong style={{ color: "#FFF", fontSize: "14px", display: "block" }}>
-                                  {l.workshop_name || "Oficina não nomeada"}
+                                  {l.workshop_name || "Oficina não informada"}
                                 </strong>
                                 <div style={{ color: "var(--text-muted)", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px", marginTop: "2px" }}>
                                   <User size={12} color="var(--text-dim)" />
                                   <span>{l.name || "Responsável"}</span>
                                 </div>
                               </div>
+                            </button>
+                          </td>
+
+                          {/* Origem & Data */}
+                          <td style={{ padding: "16px 18px", maxWidth: "230px" }}>
+                            <OriginBadge origin={l.origin} />
+                            <div style={{ color: "var(--text-dim)", fontSize: "11px", marginTop: "4px" }}>
+                              {l.created_at ? new Date(l.created_at).toLocaleDateString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "Data recente"}
                             </div>
                           </td>
 
-                          {/* Status Badge */}
-                          <td style={{ padding: "16px 18px" }}>
-                            {isPending ? (
-                              <span
-                                style={{
-                                  background: "rgba(158, 232, 36, 0.15)",
-                                  color: "var(--primary)",
-                                  border: "1px solid rgba(158, 232, 36, 0.35)",
-                                  padding: "4px 10px",
-                                  borderRadius: "var(--radius-full)",
-                                  fontSize: "11px",
-                                  fontWeight: 800,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "6px",
-                                }}
-                              >
-                                <span className="pulse-dot" style={{ background: "var(--primary)", width: "6px", height: "6px" }} />
-                                AGUARDA SUA APROVAÇÃO
-                              </span>
-                            ) : isApproved ? (
-                              <span
-                                style={{
-                                  background: "rgba(16, 185, 129, 0.15)",
-                                  color: "var(--emerald)",
-                                  border: "1px solid rgba(16, 185, 129, 0.35)",
-                                  padding: "4px 10px",
-                                  borderRadius: "var(--radius-full)",
-                                  fontSize: "11px",
-                                  fontWeight: 800,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "6px",
-                                }}
-                              >
-                                <CheckCircle2 size={13} color="var(--emerald)" />
-                                APROVADA & CRIADA
-                              </span>
-                            ) : (
-                              <span
-                                style={{
-                                  background: "rgba(239, 68, 68, 0.15)",
-                                  color: "var(--rose)",
-                                  border: "1px solid rgba(239, 68, 68, 0.35)",
-                                  padding: "4px 10px",
-                                  borderRadius: "var(--radius-full)",
-                                  fontSize: "11px",
-                                  fontWeight: 700,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "6px",
-                                }}
-                              >
-                                <Ban size={13} color="var(--rose)" />
-                                RECUSADA
-                              </span>
-                            )}
-                          </td>
+                          {/* Status */}
+                          <td style={{ padding: "16px 18px" }}>{renderLeadStatusControl(l)}</td>
 
                           {/* Contatos & WhatsApp */}
                           <td style={{ padding: "16px 18px" }}>
                             <div style={{ color: "#E2E8F0", fontSize: "12.5px" }}>{l.email || "Sem e-mail"}</div>
-                            {l.phone && (
+                            {l.phone && whatsappLink(l.phone) && (
                               <a
-                                href={`https://wa.me/55${l.phone.replace(/\D/g, "")}`}
+                                href={whatsappLink(l.phone, leadWhatsAppMessage(l))}
                                 target="_blank"
-                                rel="noreferrer"
+                                rel="noopener noreferrer"
                                 style={{
                                   color: "#34D399",
                                   fontSize: "12px",
@@ -5425,177 +5628,15 @@ export default function MasterDashboard() {
                             )}
                           </td>
 
-                          {/* Origem & Data */}
-                          <td style={{ padding: "16px 18px" }}>
-                            <span
-                              style={{
-                                background: "rgba(56, 189, 248, 0.15)",
-                                color: "#38BDF8",
-                                border: "1px solid rgba(56, 189, 248, 0.3)",
-                                padding: "2px 8px",
-                                borderRadius: "var(--radius-sm)",
-                                fontSize: "11px",
-                                fontWeight: 700,
-                              }}
-                            >
-                              {l.origin || "Landing Page"}
-                            </span>
-                            <div style={{ color: "var(--text-dim)", fontSize: "11px", marginTop: "4px" }}>
-                              {l.created_at ? new Date(l.created_at).toLocaleDateString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "Data recente"}
-                            </div>
-                          </td>
-
-                          {/* Observações */}
+                          {/* Observações (texto escapado pelo React; detalhe completo no modal) */}
                           <td style={{ padding: "16px 18px", color: "var(--text-muted)", fontSize: "12px", maxWidth: "240px" }}>
-                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.notes}>
-                              {l.notes || "Solicitação de Teste de 14 Dias"}
+                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.notes || undefined}>
+                              {l.notes ? l.notes.replace(/\s*\n+\s*/g, " · ") : "—"}
                             </div>
                           </td>
 
-                          {/* Ações do Master */}
-                          <td style={{ padding: "16px 18px", textAlign: "right" }}>
-                            {isPending ? (
-                              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleStartApproval(l)}
-                                  title="Aprovar esta solicitação, definir senha e criar conta da oficina"
-                                  style={{
-                                    background: "var(--primary)",
-                                    color: "#06080D",
-                                    padding: "8px 14px",
-                                    borderRadius: "var(--radius-sm)",
-                                    fontSize: "12px",
-                                    fontWeight: 900,
-                                    border: "none",
-                                    cursor: "pointer",
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: "6px",
-                                    boxShadow: "0 2px 10px rgba(158, 232, 36, 0.3)",
-                                    transition: "all 0.15s ease",
-                                  }}
-                                >
-                                  <Sparkles size={14} strokeWidth={2.5} />
-                                  <span>Aprovar & Gerar Acesso</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleRejectLead(l.id, l.name || l.workshop_name)}
-                                  title="Recusar esta solicitação (não libera acesso)"
-                                  style={{
-                                    background: "rgba(239, 68, 68, 0.12)",
-                                    color: "var(--rose)",
-                                    border: "1px solid rgba(239, 68, 68, 0.3)",
-                                    padding: "8px 12px",
-                                    borderRadius: "var(--radius-sm)",
-                                    fontSize: "12px",
-                                    fontWeight: 700,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  <Ban size={13} />
-                                  <span>Recusar</span>
-                                </button>
-                              </div>
-                            ) : isApproved ? (
-                              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                                {l.phone && (
-                                  <a
-                                    href={`https://wa.me/55${l.phone.replace(/\D/g, "")}?text=${encodeURIComponent(
-                                      getWhatsAppMessageText({
-                                        ownerName: l.name || "Cliente",
-                                        workshopName: l.workshop_name || "sua Oficina",
-                                        email: l.email || "",
-                                        password: "(senha já gerada)",
-                                        url: typeof window !== "undefined" && window.location.origin.includes("3005") ? window.location.origin.replace("3005", "3000") : "https://app.giravo.com.br",
-                                        days: 14,
-                                      })
-                                    )}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    title="Enviar mensagem pelo WhatsApp"
-                                    style={{
-                                      background: "rgba(37, 211, 102, 0.15)",
-                                      color: "#25D366",
-                                      border: "1px solid rgba(37, 211, 102, 0.35)",
-                                      padding: "7px 12px",
-                                      borderRadius: "var(--radius-sm)",
-                                      fontSize: "11.5px",
-                                      fontWeight: 800,
-                                      textDecoration: "none",
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: "5px",
-                                    }}
-                                  >
-                                    <MessageSquare size={13} />
-                                    <span>WhatsApp</span>
-                                  </a>
-                                )}
-
-                                {l.tenant_id && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleViewOperational(l.tenant_id!)}
-                                    title="Acessar espelho operacional desta oficina"
-                                    style={{
-                                      background: "var(--bg-card-subtle)",
-                                      border: "1px solid var(--border-subtle)",
-                                      color: "#FFF",
-                                      padding: "7px 12px",
-                                      borderRadius: "var(--radius-sm)",
-                                      fontSize: "11.5px",
-                                      fontWeight: 600,
-                                      cursor: "pointer",
-                                    }}
-                                  >
-                                    <Monitor size={12} />
-                                    <span>Ver Oficina</span>
-                                  </button>
-                                )}
-                              </div>
-                            ) : (
-                              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                                <button
-                                  type="button"
-                                  onClick={() => handleReopenLead(l.id)}
-                                  title="Reabrir esta solicitação para aprovação"
-                                  style={{
-                                    background: "rgba(56, 189, 248, 0.15)",
-                                    color: "#38BDF8",
-                                    border: "1px solid rgba(56, 189, 248, 0.35)",
-                                    padding: "6px 12px",
-                                    borderRadius: "var(--radius-sm)",
-                                    fontSize: "11.5px",
-                                    fontWeight: 700,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  <RefreshCw size={12} />
-                                  <span>Reabrir</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteLead(l.id)}
-                                  title="Excluir lead permanentemente"
-                                  style={{
-                                    background: "rgba(239, 68, 68, 0.1)",
-                                    color: "var(--rose)",
-                                    border: "1px solid rgba(239, 68, 68, 0.25)",
-                                    padding: "6px 10px",
-                                    borderRadius: "var(--radius-sm)",
-                                    fontSize: "11.5px",
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              </div>
-                            )}
-                          </td>
+                          {/* Ações */}
+                          <td style={{ padding: "16px 18px", textAlign: "right" }}>{renderLeadActions(l)}</td>
                         </tr>
                       );
                     })
@@ -5604,214 +5645,69 @@ export default function MasterDashboard() {
               </table>
             </div>
 
-            {/* Lista de Leads Mobile (Cards Nativos & Interativos) */}
+            {/* Lista de Leads Mobile */}
             <div className="mobile-only" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
               {filteredLeads.length === 0 ? (
                 <div className="glass-panel" style={{ padding: "36px 16px", textAlign: "center", color: "var(--text-dim)" }}>
                   <Inbox size={32} style={{ margin: "0 auto 10px", opacity: 0.3 }} />
-                  <p style={{ margin: 0, fontSize: "13.5px" }}>Nenhuma solicitação encontrada nesta aba.</p>
+                  <p style={{ margin: 0, fontSize: "13.5px" }}>Nenhum lead encontrado com estes filtros.</p>
                 </div>
               ) : (
-                filteredLeads.map((l) => {
-                  const cleanPhone = (l.phone || "").replace(/\D/g, "");
-                  const isPending = l.status === "PENDING" || !l.status;
-                  const isApproved = l.status === "APPROVED";
-                  const isRejected = l.status === "REJECTED";
-
-                  return (
-                    <div key={`m-lead-${l.id}`} className="lead-mobile-card">
-                      {/* Top: Workshop Name & Status Badge */}
-                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px" }}>
-                        <div>
-                          <strong style={{ fontSize: "14px", color: "#FFF", display: "block" }}>
-                            {l.workshop_name || "Oficina Sem Nome"}
-                          </strong>
-                          <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
-                            Responsável: {l.name}
-                          </span>
-                        </div>
-
-                        <span
-                          style={{
-                            padding: "3px 8px",
-                            fontSize: "10px",
-                            fontWeight: 800,
-                            borderRadius: "var(--radius-full)",
-                            color: isApproved ? "#34D399" : isRejected ? "#F87171" : "var(--primary)",
-                            background: isApproved
-                              ? "rgba(16, 185, 129, 0.15)"
-                              : isRejected
-                              ? "rgba(239, 68, 68, 0.15)"
-                              : "rgba(158, 232, 36, 0.15)",
-                            border: `1px solid ${
-                              isApproved
-                                ? "rgba(16, 185, 129, 0.35)"
-                                : isRejected
-                                ? "rgba(239, 68, 68, 0.35)"
-                                : "rgba(158, 232, 36, 0.35)"
-                            }`,
-                            flexShrink: 0,
-                          }}
-                        >
-                          {isApproved ? "Aprovado" : isRejected ? "Recusado" : "Aguardando"}
-                        </span>
-                      </div>
-
-                      {/* Middle: Phone + Date + Origin */}
-                      <div
-                        style={{
-                          background: "var(--bg-main)",
-                          border: "1px solid var(--border-subtle)",
-                          borderRadius: "var(--radius-sm)",
-                          padding: "10px 12px",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "6px",
-                          fontSize: "11.5px",
-                        }}
+                filteredLeads.map((l) => (
+                  <div key={`m-lead-${l.id}`} className="lead-mobile-card">
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px" }}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedLeadId(l.id)}
+                        style={{ background: "transparent", border: "none", padding: 0, textAlign: "left", color: "inherit", cursor: "pointer", minWidth: 0 }}
                       >
-                        {l.phone && (
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                            <span style={{ color: "#FFF", fontWeight: 700 }}>{l.phone}</span>
-                            {cleanPhone && (
-                              <a
-                                href={`https://wa.me/55${cleanPhone}?text=Ol%C3%A1%20${encodeURIComponent(l.name)}%2C%20vi%20sua%20solicita%C3%A7%C3%A3o%20de%20teste%20no%20GIRAVO.`}
-                                target="_blank"
-                                rel="noreferrer"
-                                style={{
-                                  color: "#25D366",
-                                  fontWeight: 700,
-                                  textDecoration: "none",
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "4px",
-                                }}
-                              >
-                                <MessageCircle size={12} />
-                                <span>WhatsApp</span>
-                              </a>
-                            )}
-                          </div>
-                        )}
-                        {l.email && <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>{l.email}</span>}
-                        <div style={{ display: "flex", justifyContent: "space-between", color: "var(--text-dim)", fontSize: "10.5px", paddingTop: "4px", borderTop: "1px solid var(--border-subtle)" }}>
-                          <span>Criado em: {new Date(l.created_at).toLocaleDateString("pt-BR")}</span>
-                          <span>Origem: {l.origin || "Site Oficial"}</span>
+                        <strong style={{ fontSize: "14px", color: "#FFF", display: "block" }}>
+                          {l.workshop_name || "Oficina não informada"}
+                        </strong>
+                        <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>Responsável: {l.name}</span>
+                      </button>
+                      <LeadStatusBadge lead={l} />
+                    </div>
+
+                    <div
+                      style={{
+                        background: "var(--bg-main)",
+                        border: "1px solid var(--border-subtle)",
+                        borderRadius: "var(--radius-sm)",
+                        padding: "10px 12px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "6px",
+                        fontSize: "11.5px",
+                      }}
+                    >
+                      {l.phone && (
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                          <span style={{ color: "#FFF", fontWeight: 700 }}>{l.phone}</span>
+                          {whatsappLink(l.phone) && (
+                            <a
+                              href={whatsappLink(l.phone, leadWhatsAppMessage(l))}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ color: "#25D366", fontWeight: 700, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                            >
+                              <MessageCircle size={12} />
+                              <span>WhatsApp</span>
+                            </a>
+                          )}
                         </div>
-                      </div>
-
-                      {/* Actions */}
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                        {isPending ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => handleStartApproval(l)}
-                              style={{
-                                flex: 1,
-                                padding: "9px 12px",
-                                background: "var(--primary)",
-                                color: "#06080D",
-                                fontWeight: 850,
-                                fontSize: "12px",
-                                borderRadius: "var(--radius-sm)",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                gap: "6px",
-                              }}
-                            >
-                              <CheckCircle2 size={13} />
-                              <span>Aprovar Teste 14 Dias</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleRejectLead(l.id, l.name || l.workshop_name)}
-                              style={{
-                                padding: "9px 12px",
-                                background: "rgba(239, 68, 68, 0.12)",
-                                border: "1px solid rgba(239, 68, 68, 0.3)",
-                                color: "var(--rose)",
-                                fontWeight: 700,
-                                fontSize: "12px",
-                                borderRadius: "var(--radius-sm)",
-                              }}
-                            >
-                              <X size={13} />
-                            </button>
-                          </>
-                        ) : isApproved && l.tenant_id ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => handleViewOperational(l.tenant_id!)}
-                              style={{
-                                flex: 1,
-                                padding: "8px 12px",
-                                background: "var(--bg-card-subtle)",
-                                border: "1px solid var(--border-subtle)",
-                                color: "#FFF",
-                                fontWeight: 600,
-                                fontSize: "11.5px",
-                                borderRadius: "var(--radius-sm)",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                gap: "6px",
-                              }}
-                            >
-                              <Monitor size={12} />
-                              <span>Ver Oficina</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleOpenChat(l.tenant_id!)}
-                              style={{
-                                padding: "8px 12px",
-                                background: "rgba(158, 232, 36, 0.12)",
-                                border: "1px solid rgba(158, 232, 36, 0.3)",
-                                color: "var(--primary)",
-                                fontWeight: 700,
-                                fontSize: "11.5px",
-                                borderRadius: "var(--radius-sm)",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "5px",
-                              }}
-                            >
-                              <MessageSquare size={12} />
-                              <span>Chat</span>
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleReopenLead(l.id)}
-                            style={{
-                              flex: 1,
-                              padding: "8px 12px",
-                              background: "rgba(56, 189, 248, 0.12)",
-                              border: "1px solid rgba(56, 189, 248, 0.3)",
-                              color: "#38BDF8",
-                              fontWeight: 700,
-                              fontSize: "11.5px",
-                              borderRadius: "var(--radius-sm)",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              gap: "6px",
-                            }}
-                          >
-                            <RefreshCw size={12} />
-                            <span>Reabrir Solicitação</span>
-                          </button>
-                        )}
+                      )}
+                      {l.email && <span style={{ color: "var(--text-muted)", fontSize: "11px", wordBreak: "break-all" }}>{l.email}</span>}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap", color: "var(--text-dim)", fontSize: "10.5px", paddingTop: "6px", borderTop: "1px solid var(--border-subtle)" }}>
+                        <span>{l.created_at ? new Date(l.created_at).toLocaleDateString("pt-BR") : ""}</span>
+                        <OriginBadge origin={l.origin} />
                       </div>
                     </div>
-                  );
-                })
+
+                    {isMaterialFlowLead(l) && <div>{renderLeadStatusControl(l)}</div>}
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>{renderLeadActions(l)}</div>
+                  </div>
+                ))
               )}
             </div>
           </div>
@@ -6791,6 +6687,25 @@ export default function MasterDashboard() {
         </div>
       )}
 
+      {/* MODAL: DETALHE DO LEAD (teste grátis ou material gratuito) */}
+      {selectedLead && (
+        <LeadDetailModal
+          lead={selectedLead}
+          busy={leadActionBusy}
+          onClose={() => setSelectedLeadId(null)}
+          onChangeStatus={(status) => handleChangeMaterialLeadStatus(selectedLead, status)}
+          onConvert={() => handleConvertMaterialLead(selectedLead)}
+          onStartApproval={() => {
+            setSelectedLeadId(null);
+            handleStartApproval(selectedLead);
+          }}
+          onReject={() => {
+            setSelectedLeadId(null);
+            handleRejectLead(selectedLead.id, selectedLead.name || selectedLead.workshop_name);
+          }}
+        />
+      )}
+
       {/* ==================================================================== */}
       {/* MODAL 1: APROVAÇÃO DE TESTE DE 14 DIAS & GERAÇÃO DE SENHA (MASTER)  */}
       {/* ==================================================================== */}
@@ -7681,9 +7596,9 @@ export default function MasterDashboard() {
         >
           <div style={{ position: "relative" }}>
             <Users size={20} />
-            {pendingLeadsCount > 0 && (
+            {leadsToHandleCount > 0 && (
               <span className="mobile-nav-badge" style={{ background: "var(--primary)", color: "#06080D" }}>
-                {pendingLeadsCount}
+                {leadsToHandleCount}
               </span>
             )}
           </div>
